@@ -2,27 +2,39 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
+const store = require('./storage');
 
 const app = express();
-app.use(cors()); // El panel JOPEX corre como archivo local (file://) — CORS abierto es necesario acá.
+app.use(cors()); // El panel JOPEX puede correr como archivo local (file://) — CORS abierto es necesario acá.
 app.use(express.json());
 
-const TOKENS_FILE = path.join(__dirname, 'tokens.json');
 const ML_API = 'https://api.mercadolibre.com';
 const ML_AUTH = 'https://auth.mercadolibre.com.ar'; // .com.ar para Argentina — revisar si cambia de país
 
-// ---------- Guardado simple de tokens (un solo usuario: vos) ----------
+// ---------- Token en memoria (se carga del store durable al arrancar) ----------
+// Mantenemos una copia en memoria para que leerTokens() siga siendo síncrono
+// (lo usan las rutas y la raíz). guardarTokens() actualiza la copia Y persiste.
+let tokensCache = null;
 function leerTokens() {
-  try {
-    return JSON.parse(fs.readFileSync(TOKENS_FILE, 'utf8'));
-  } catch (e) {
-    return null;
-  }
+  return tokensCache;
 }
-function guardarTokens(data) {
-  fs.writeFileSync(TOKENS_FILE, JSON.stringify(data, null, 2));
+async function guardarTokens(data) {
+  tokensCache = data;
+  await store.save(data);
+}
+
+// ---------- Seguridad: API key para las rutas de datos ----------
+// Solo tu panel (que conoce PANEL_API_KEY) puede leer /api/*.
+// Si PANEL_API_KEY no está configurada, NO bloquea (para no romper nada antes
+// de que la definas). La key se manda en el header 'x-api-key' o como ?api_key=.
+function requireApiKey(req, res, next) {
+  const configurada = process.env.PANEL_API_KEY;
+  if (!configurada) return next(); // sin configurar => modo abierto (compatibilidad)
+  const provista = req.get('x-api-key') || req.query.api_key;
+  if (provista !== configurada) {
+    return res.status(401).json({ error: 'API key inválida o faltante.' });
+  }
+  next();
 }
 
 // ---------- Paso 1: arrancar el login ----------
@@ -50,11 +62,11 @@ app.get('/auth/callback', async (req, res) => {
         code,
         redirect_uri: process.env.ML_REDIRECT_URI,
       },
-      headers: { 'Accept': 'application/json' },
+      headers: { Accept: 'application/json' },
     });
 
     const { access_token, refresh_token, expires_in, user_id } = resp.data;
-    guardarTokens({
+    await guardarTokens({
       access_token,
       refresh_token,
       user_id,
@@ -88,6 +100,7 @@ async function getAccessTokenValido() {
     },
   });
 
+  // ML rota el refresh_token en cada renovación: guardamos SIEMPRE el nuevo.
   const nuevos = {
     access_token: resp.data.access_token,
     refresh_token: resp.data.refresh_token || tokens.refresh_token,
@@ -95,7 +108,7 @@ async function getAccessTokenValido() {
     obtenido_en: Date.now(),
     expira_en_seg: resp.data.expires_in,
   };
-  guardarTokens(nuevos);
+  await guardarTokens(nuevos);
   return nuevos.access_token;
 }
 
@@ -103,10 +116,10 @@ app.locals.getAccessTokenValido = getAccessTokenValido;
 app.locals.ML_API = ML_API;
 app.locals.leerTokens = leerTokens;
 
-// ---------- Rutas de datos (una por tipo de información) ----------
-app.use('/api/orders', require('./routes/orders')(app));
-app.use('/api/items', require('./routes/items')(app));
-app.use('/api/ads', require('./routes/ads')(app));
+// ---------- Rutas de datos (protegidas con API key) ----------
+app.use('/api/orders', requireApiKey, require('./routes/orders')(app));
+app.use('/api/items', requireApiKey, require('./routes/items')(app));
+app.use('/api/ads', requireApiKey, require('./routes/ads')(app));
 
 app.get('/', (req, res) => {
   const tokens = leerTokens();
@@ -114,8 +127,26 @@ app.get('/', (req, res) => {
     status: 'ok',
     conectado_con_ml: !!tokens,
     user_id: tokens?.user_id || null,
+    persistencia: store.usarUpstash ? 'upstash' : 'archivo-local',
   });
 });
 
+// ---------- Arranque: primero cargamos el token del store, después escuchamos ----------
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor JOPEX-ML corriendo en el puerto ${PORT}`));
+store
+  .read()
+  .then((t) => {
+    tokensCache = t;
+  })
+  .catch((e) => {
+    console.error('No se pudo cargar el token del store al arrancar:', e.message);
+  })
+  .finally(() => {
+    app.listen(PORT, () =>
+      console.log(
+        `Servidor JOPEX-ML corriendo en el puerto ${PORT} — persistencia: ${
+          store.usarUpstash ? 'Upstash Redis (durable)' : 'archivo local (efímero)'
+        }`
+      )
+    );
+  });
