@@ -121,6 +121,7 @@ app.use('/api/orders', requireApiKey, require('./routes/orders')(app));
 app.use('/api/items', requireApiKey, require('./routes/items')(app));
 app.use('/api/ads', requireApiKey, require('./routes/ads')(app));
 app.use('/api/competencia', requireApiKey, require('./routes/competencia')(app));
+app.use('/api/diagnostico', requireApiKey, require('./routes/diagnostico')(app));
 
 app.get('/', (req, res) => {
   const tokens = leerTokens();
