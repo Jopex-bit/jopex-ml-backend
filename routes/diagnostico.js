@@ -114,10 +114,37 @@ module.exports = (app) => {
         };
       });
 
+      // Variante: promociones listadas a nivel usuario (a veces pide otro scope)
+      await probar('promociones_por_usuario', async () => {
+        const r = await axios.get(`${API}/seller-promotions/users/${uid}`, {
+          ...auth,
+          params: { app_version: 'v2' },
+        });
+        const lista = Array.isArray(r.data) ? r.data : r.data?.results || [];
+        return { cantidad: lista.length, crudo: lista.slice(0, 3) };
+      });
+
+      // Plan B sin permisos especiales: si la publicación tiene precio original
+      // mayor al precio actual, hay un descuento vigente. Da el % pero NO la
+      // fecha de fin (ese dato solo lo tiene la API de promociones).
+      await probar('promocion_plan_b_precio', async () => {
+        const orig = b.original_price;
+        const hay = orig != null && orig > b.price;
+        return {
+          hay_descuento_vigente: hay,
+          precio_actual: b.price,
+          precio_original: orig ?? null,
+          descuento_pct: hay ? Number((((orig - b.price) / orig) * 100).toFixed(2)) : 0,
+          nota: 'Este plan B detecta el descuento pero no la fecha de fin.',
+        };
+      });
+
       // ---- 3) COSTO DE ENVÍO que paga el vendedor ----
       await probar('envio', async () => {
-        const dim = b.shipping?.dimensions || null;
+        // La API acepta dimensiones O item_id. Esta publicación no declara
+        // dimensiones, así que vamos con item_id (es lo que pide el error 400).
         const params = {
+          item_id: itemId,
           item_price: b.price,
           listing_type_id: b.listing_type_id,
           mode: 'me2',
@@ -125,12 +152,28 @@ module.exports = (app) => {
           logistic_type: b.shipping?.logistic_type || 'drop_off',
           verbose: true,
         };
-        if (dim) params.dimensions = dim;
+        if (b.shipping?.dimensions) params.dimensions = b.shipping.dimensions;
         const r = await axios.get(`${API}/users/${uid}/shipping_options/free`, { ...auth, params });
+        const cob = r.data?.coverage?.all_country || {};
         return {
-          costo_vendedor: r.data?.coverage?.all_country?.list_cost ?? null,
-          bonificado: r.data?.coverage?.all_country?.billable_weight ?? null,
+          costo_vendedor: cob.list_cost ?? null,
+          costo_con_descuento: cob.cost ?? null,
+          peso_facturable: cob.billable_weight ?? null,
           crudo: r.data,
+        };
+      });
+
+      // Plan B de envío: costos de envío declarados en la propia publicación
+      await probar('envio_plan_b', async () => {
+        const r = await axios.get(`${API}/items/${itemId}/shipping_options`, auth);
+        const ops = r.data?.options || [];
+        return {
+          opciones: ops.map((o) => ({
+            nombre: o.name,
+            costo_comprador: o.cost,
+            costo_vendedor: o.list_cost,
+            envio_id: o.shipping_method_id,
+          })),
         };
       });
 
@@ -168,14 +211,29 @@ module.exports = (app) => {
       });
 
       // ---- Conclusión legible ----
+      // La comisión trae el desglose real: comisión pura + recargo por financiación
+      const det = reporte.pruebas.comision?.detalle_crudo || {};
+      reporte.valores_para_costos = {
+        cargo_venta_pct: det.meli_percentage_fee ?? det.percentage_fee ?? null,
+        financiacion_pct: det.financing_add_on_fee ?? null,
+        cargo_fijo: det.fixed_fee ?? null,
+        envio_ml: reporte.pruebas.envio?.costo_vendedor ?? null,
+      };
       reporte.conclusion = {
         comision: reporte.pruebas.comision?.ok ? 'AUTOMATIZABLE' : 'queda manual',
-        promociones: reporte.pruebas.promociones?.ok ? 'AUTOMATIZABLE' : 'queda manual',
-        envio: reporte.pruebas.envio?.ok ? 'AUTOMATIZABLE' : 'queda manual',
         financiacion:
-          reporte.pruebas.financiacion_sale_terms?.ok || reporte.pruebas.financiacion_ordenes?.ok
-            ? 'PARCIAL — revisar los valores devueltos'
+          det.financing_add_on_fee != null
+            ? 'AUTOMATIZABLE (viene en el desglose de la comisión)'
             : 'queda manual',
+        envio:
+          reporte.pruebas.envio?.ok || reporte.pruebas.envio_plan_b?.ok
+            ? 'AUTOMATIZABLE'
+            : 'queda manual',
+        promociones: reporte.pruebas.promociones?.ok
+          ? 'AUTOMATIZABLE'
+          : reporte.pruebas.promociones_por_usuario?.ok
+          ? 'AUTOMATIZABLE por usuario'
+          : 'solo el % por plan B (sin fecha de fin) — revisar scopes de la app',
       };
 
       res.json(reporte);
