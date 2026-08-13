@@ -82,6 +82,36 @@ module.exports = (app) => {
         if (offset >= total || res_.length === 0) break;
       }
 
+      // ---- Clasificar cada venta por vía de despacho ----
+      // FULL (fulfillment) descuenta del stock que informa ML.
+      // Envío propio (correo/colecta) descuenta de TU depósito.
+      // Sin esto no se puede saber de dónde salió cada unidad.
+      const tipoPorShipment = {};
+      const idsEnvio = [];
+      todas.forEach((o) => {
+        if (!estadosOk.includes(o.status)) return;
+        const sid = o.shipping && o.shipping.id;
+        if (sid && !tipoPorShipment[sid]) { tipoPorShipment[sid] = null; idsEnvio.push(sid); }
+      });
+      let enviosLeidos = 0, enviosFallidos = 0;
+      for (let i = 0; i < idsEnvio.length; i += 5) {
+        const tanda = idsEnvio.slice(i, i + 5);
+        await Promise.all(tanda.map(async (sid) => {
+          try {
+            const r = await axios.get(`${API}/shipments/${sid}`, { ...auth, timeout: 8000 });
+            tipoPorShipment[sid] = r.data?.logistic_type || null;
+            enviosLeidos++;
+          } catch (e) {
+            enviosFallidos++;
+          }
+        }));
+      }
+      const esFull = (o) => {
+        const sid = o.shipping && o.shipping.id;
+        const lt = sid ? tipoPorShipment[sid] : null;
+        return lt === 'fulfillment';
+      };
+
       // ---- Agregar por publicación ----
       const porItem = {};
       let contadasPagadas = 0, ignoradasCanceladas = 0;
@@ -115,12 +145,20 @@ module.exports = (app) => {
               meses: {},
               dias: {},
               unidades_total: 0,
+              unidades_full: 0,      // vendidas y despachadas por FULL
+              unidades_propias: 0,   // vendidas y despachadas por vos
+              unidades_sin_dato: 0,
             };
           }
           const q = Number(it.quantity) || 0;
           porItem[id].meses[claveMes] = (porItem[id].meses[claveMes] || 0) + q;
           porItem[id].dias[claveDia] = (porItem[id].dias[claveDia] || 0) + q;
           porItem[id].unidades_total += q;
+          const sid = o.shipping && o.shipping.id;
+          const lt = sid ? tipoPorShipment[sid] : null;
+          if (lt === 'fulfillment') porItem[id].unidades_full += q;
+          else if (lt) porItem[id].unidades_propias += q;
+          else porItem[id].unidades_sin_dato += q;
         });
       });
 
@@ -152,6 +190,10 @@ module.exports = (app) => {
         ml_item_id: x.ml_item_id,
         titulo: x.titulo,
         unidades_total: x.unidades_total,
+        // De dónde salió cada unidad vendida:
+        unidades_vendidas_full: x.unidades_full,
+        unidades_vendidas_propias: x.unidades_propias,
+        unidades_vendidas_sin_dato: x.unidades_sin_dato,
         mensuales: serieMeses.map((m) => ({
           mes: m.mes,
           anio: m.anio,
@@ -174,6 +216,8 @@ module.exports = (app) => {
 
       res.json({
         generado_en: new Date().toISOString(),
+        envios_consultados: enviosLeidos,
+        envios_sin_dato: enviosFallidos,
         zona_horaria: TZ_AR,
         hoy_en_argentina: hoyAR.iso,
         desde: fechaAR(desde).iso,
