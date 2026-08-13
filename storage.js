@@ -53,4 +53,27 @@ async function save(data) {
   fs.writeFileSync(TOKENS_FILE, JSON.stringify(data, null, 2));
 }
 
-module.exports = { read, save, usarUpstash };
+// ---------- Almacén genérico (para el estado del panel) ----------
+// Mismo mecanismo, pero con clave libre: permite guardar el contenido completo
+// del panel (costos, cotizaciones, stock, etc.) además del token de ML.
+async function readKey(clave) {
+  if (usarUpstash) {
+    const crudo = await redisCmd(['GET', clave]);
+    return crudo ? JSON.parse(crudo) : null;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, clave + '.json'), 'utf8'));
+  } catch (e) {
+    return null;
+  }
+}
+
+async function saveKey(clave, data) {
+  if (usarUpstash) {
+    await redisCmd(['SET', clave, JSON.stringify(data)]);
+    return;
+  }
+  fs.writeFileSync(path.join(__dirname, clave + '.json'), JSON.stringify(data, null, 2));
+}
+
+module.exports = { read, save, usarUpstash, readKey, saveKey };

@@ -2,11 +2,56 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const store = require('./storage');
 
 const app = express();
+app.set('trust proxy', 1); // Render corre detrás de un proxy TLS
 app.use(cors()); // El panel JOPEX puede correr como archivo local (file://) — CORS abierto es necesario acá.
-app.use(express.json());
+// El estado del panel puede pesar bastante (cotizaciones, ventas, stock).
+app.use(express.json({ limit: '8mb' }));
+app.locals.store = store;
+
+// ---------------------------------------------------------------------------
+// Sesión del panel web
+// ---------------------------------------------------------------------------
+// El panel servido en /panel queda detrás de una contraseña. Se firma un token
+// con HMAC y se guarda en una cookie httpOnly (no accesible por JavaScript).
+const PANEL_PASSWORD = process.env.PANEL_PASSWORD || process.env.APP_SECRET || '';
+const FIRMA = process.env.APP_SECRET || 'jopex';
+const DIAS_SESION = 30;
+
+function firmar(valor) {
+  return crypto.createHmac('sha256', FIRMA).update(valor).digest('hex');
+}
+function crearToken() {
+  const vence = Date.now() + DIAS_SESION * 24 * 3600 * 1000;
+  return vence + '.' + firmar(String(vence));
+}
+function tokenValido(token) {
+  if (!token || typeof token !== 'string') return false;
+  const [vence, firma] = token.split('.');
+  if (!vence || !firma) return false;
+  if (Number(vence) < Date.now()) return false;
+  const esperada = firmar(vence);
+  // Comparación de tiempo constante para no filtrar información por timing.
+  const a = Buffer.from(firma), b = Buffer.from(esperada);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+function leerCookie(req, nombre) {
+  const raw = req.headers.cookie;
+  if (!raw) return null;
+  for (const parte of raw.split(';')) {
+    const [k, ...v] = parte.trim().split('=');
+    if (k === nombre) return decodeURIComponent(v.join('='));
+  }
+  return null;
+}
+function haySesion(req) {
+  return tokenValido(leerCookie(req, 'jopex_sesion'));
+}
 
 const ML_API = 'https://api.mercadolibre.com';
 const ML_AUTH = 'https://auth.mercadolibre.com.ar'; // .com.ar para Argentina — revisar si cambia de país
@@ -30,6 +75,8 @@ async function guardarTokens(data) {
 function requireApiKey(req, res, next) {
   const configurada = process.env.PANEL_API_KEY;
   if (!configurada) return next(); // sin configurar => modo abierto (compatibilidad)
+  // El panel web usa la cookie de sesión; el panel local usa la API key.
+  if (haySesion(req)) return next();
   const provista = req.get('x-api-key') || req.query.api_key;
   if (provista !== configurada) {
     return res.status(401).json({ error: 'API key inválida o faltante.' });
@@ -147,6 +194,77 @@ app.use('/api/diagnostico', requireApiKey, require('./routes/diagnostico')(app))
 app.use('/api/costos', requireApiKey, require('./routes/costos')(app));
 app.use('/api/curva', requireApiKey, require('./routes/curva')(app));
 app.use('/api/ventas', requireApiKey, require('./routes/ventas')(app));
+app.use('/api/estado', requireApiKey, require('./routes/estado')(app));
+
+// ---------------------------------------------------------------------------
+// Panel web: login + servir el HTML
+// ---------------------------------------------------------------------------
+const PANEL_FILE = path.join(__dirname, 'panel.html');
+
+function paginaLogin(error) {
+  return `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JOPEX</title><style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#070b14;
+ font-family:system-ui,-apple-system,sans-serif;color:#eaf2ff}
+form{background:#0e1930;border:1px solid rgba(140,163,196,.15);border-radius:14px;
+ padding:28px;width:min(360px,90vw)}
+h1{font-size:18px;margin:0 0 4px}p{font-size:13px;color:#8ca3c4;margin:0 0 18px}
+input{width:100%;box-sizing:border-box;padding:11px 12px;border-radius:8px;
+ border:1px solid rgba(140,163,196,.2);background:#0b1526;color:#eaf2ff;font-size:15px}
+button{width:100%;margin-top:12px;padding:11px;border:none;border-radius:8px;
+ background:linear-gradient(90deg,#3ddc3c,#22c55e);color:#04210a;font-weight:700;
+ font-size:15px;cursor:pointer}
+.err{color:#ff4d5e;font-size:13px;margin-top:10px}
+</style></head><body><form method="POST" action="/panel/login">
+<h1>JOPEX Panel</h1><p>Ingresá la contraseña para continuar.</p>
+<input type="password" name="password" placeholder="Contraseña" autofocus autocomplete="current-password">
+<button type="submit">Entrar</button>
+${error ? '<div class="err">' + error + '</div>' : ''}
+</form></body></html>`;
+}
+
+app.get('/panel/login', (req, res) => res.type('html').send(paginaLogin(null)));
+
+app.post('/panel/login', express.urlencoded({ extended: false }), (req, res) => {
+  if (!PANEL_PASSWORD) {
+    return res.type('html').send(paginaLogin('No hay contraseña configurada en el servidor (PANEL_PASSWORD).'));
+  }
+  const pass = (req.body && req.body.password) || '';
+  const a = Buffer.from(pass), b = Buffer.from(PANEL_PASSWORD);
+  const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!ok) return res.status(401).type('html').send(paginaLogin('Contraseña incorrecta.'));
+  // Secure solo cuando la conexión es https (Render lo es). En local sin TLS
+  // la cookie se rechazaría y no se podría entrar.
+  const esHttps = req.secure || req.get('x-forwarded-proto') === 'https';
+  res.setHeader('Set-Cookie',
+    'jopex_sesion=' + encodeURIComponent(crearToken()) +
+    '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + (DIAS_SESION * 24 * 3600) +
+    (esHttps ? '; Secure' : ''));
+  res.redirect('/panel');
+});
+
+app.get('/panel/salir', (req, res) => {
+  res.setHeader('Set-Cookie', 'jopex_sesion=; Path=/; HttpOnly; Max-Age=0');
+  res.redirect('/panel/login');
+});
+
+app.get('/panel', (req, res) => {
+  if (!haySesion(req)) return res.redirect('/panel/login');
+  let html;
+  try {
+    html = fs.readFileSync(PANEL_FILE, 'utf8');
+  } catch (e) {
+    return res.status(404).type('html').send(
+      '<p style="font-family:sans-serif;padding:24px">Falta el archivo <b>panel.html</b> en el repositorio. ' +
+      'Subilo a la raíz con ese nombre exacto.</p>');
+  }
+  // Le avisamos al panel que corre en modo web: así guarda en el servidor
+  // en lugar de quedarse solo en el navegador.
+  html = html.replace('</head>',
+    '<script>window.JOPEX_WEB=true;window.JOPEX_API="";</script></head>');
+  res.type('html').send(html);
+});
 
 app.get('/', (req, res) => {
   const tokens = leerTokens();
