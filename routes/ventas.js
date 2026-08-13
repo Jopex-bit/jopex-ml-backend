@@ -30,6 +30,9 @@ module.exports = (app) => {
       const uid = tokens.user_id;
 
       const meses = Math.min(Math.max(Number(req.query.meses) || 6, 1), 24);
+      // Qué estados cuentan como venta. Por defecto solo 'paid'.
+      // El panel de métricas de ML puede contar otros estados, por eso es configurable.
+      const estadosOk = String(req.query.estados || 'paid').split(',').map(s => s.trim()).filter(Boolean);
       const hasta = new Date();
       const desde = new Date();
       desde.setMonth(desde.getMonth() - meses);
@@ -63,9 +66,19 @@ module.exports = (app) => {
       // ---- Agregar por publicación ----
       const porItem = {};
       let contadasPagadas = 0, ignoradasCanceladas = 0;
+      // Desglose por estado: sirve para comparar contra el panel de métricas de ML
+      // y entender de dónde sale cualquier diferencia.
+      const porEstado = {};
 
       todas.forEach((o) => {
-        const pagada = o.status === 'paid';
+        const st = o.status || 'desconocido';
+        if (!porEstado[st]) porEstado[st] = { ordenes: 0, unidades: 0 };
+        porEstado[st].ordenes++;
+        (o.order_items || []).forEach((it) => {
+          porEstado[st].unidades += Number(it.quantity) || 0;
+        });
+
+        const pagada = estadosOk.includes(st);
         if (!pagada) { ignoradasCanceladas++; return; }
         contadasPagadas++;
         const f = new Date(o.date_created);
@@ -120,13 +133,28 @@ module.exports = (app) => {
         diarias: Object.keys(x.dias).sort().map((f) => ({ fecha: f, unidades: x.dias[f] })),
       }));
 
+      const unidadesContadas = items.reduce((a, x) => a + x.unidades_total, 0);
+      const totalTodosLosEstados = Object.values(porEstado)
+        .reduce((a, x) => ({ ordenes: a.ordenes + x.ordenes, unidades: a.unidades + x.unidades }),
+                { ordenes: 0, unidades: 0 });
+
       res.json({
         generado_en: new Date().toISOString(),
         desde: desde.toISOString().slice(0, 10),
         hasta: hasta.toISOString().slice(0, 10),
+        estados_contados: estadosOk,
         ordenes_leidas: todas.length,
         ordenes_pagadas: contadasPagadas,
         ordenes_ignoradas: ignoradasCanceladas,
+        unidades_contadas: unidadesContadas,
+        // Para comparar contra el panel de métricas de Mercado Libre:
+        comparacion: {
+          contando_solo: estadosOk.join(', '),
+          ordenes: contadasPagadas,
+          unidades: unidadesContadas,
+          contando_todos_los_estados: totalTodosLosEstados,
+          por_estado: porEstado
+        },
         meses: serieMeses,
         items,
       });
