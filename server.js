@@ -203,26 +203,85 @@ const PANEL_FILE = path.join(__dirname, 'panel.html');
 
 function paginaLogin(error) {
   return `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>JOPEX</title><style>
-body{margin:0;min-height:100vh;display:grid;place-items:center;background:#070b14;
- font-family:system-ui,-apple-system,sans-serif;color:#eaf2ff}
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>JOPEX</title>
+<link rel="manifest" href="/panel/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/panel/icono.png">
+<meta name="theme-color" content="#070b14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="JOPEX"><style>
+body{margin:0;min-height:100dvh;display:grid;place-items:center;background:#070b14;
+ font-family:system-ui,-apple-system,sans-serif;color:#eaf2ff;
+ padding:env(safe-area-inset-top) 16px env(safe-area-inset-bottom)}
 form{background:#0e1930;border:1px solid rgba(140,163,196,.15);border-radius:14px;
- padding:28px;width:min(360px,90vw)}
-h1{font-size:18px;margin:0 0 4px}p{font-size:13px;color:#8ca3c4;margin:0 0 18px}
-input{width:100%;box-sizing:border-box;padding:11px 12px;border-radius:8px;
- border:1px solid rgba(140,163,196,.2);background:#0b1526;color:#eaf2ff;font-size:15px}
-button{width:100%;margin-top:12px;padding:11px;border:none;border-radius:8px;
+ padding:28px 22px;width:min(360px,100%);box-sizing:border-box}
+.logo{display:block;height:44px;margin:0 auto 18px}
+h1{font-size:18px;margin:0 0 4px;text-align:center}
+p{font-size:13px;color:#8ca3c4;margin:0 0 18px;text-align:center}
+input{width:100%;box-sizing:border-box;padding:13px 12px;border-radius:8px;
+ border:1px solid rgba(140,163,196,.2);background:#0b1526;color:#eaf2ff;font-size:16px}
+button{width:100%;margin-top:12px;padding:13px;border:none;border-radius:8px;
  background:linear-gradient(90deg,#3ddc3c,#22c55e);color:#04210a;font-weight:700;
- font-size:15px;cursor:pointer}
-.err{color:#ff4d5e;font-size:13px;margin-top:10px}
+ font-size:16px;cursor:pointer}
+.err{color:#ff4d5e;font-size:13px;margin-top:10px;text-align:center}
 </style></head><body><form method="POST" action="/panel/login">
+<img class="logo" src="/panel/icono.png" alt="JOPEX">
 <h1>JOPEX Panel</h1><p>Ingresá la contraseña para continuar.</p>
 <input type="password" name="password" placeholder="Contraseña" autofocus autocomplete="current-password">
 <button type="submit">Entrar</button>
 ${error ? '<div class="err">' + error + '</div>' : ''}
 </form></body></html>`;
 }
+
+// ---- Ícono y manifiesto: permiten instalar el panel en el celular ----
+// El ícono ya está adentro de panel.html como data:URL; lo extraemos una vez y
+// lo servimos como archivo para que Android/iOS lo puedan usar.
+let iconoCache = null;
+function iconoPanel() {
+  if (iconoCache) return iconoCache;
+  try {
+    const html = fs.readFileSync(PANEL_FILE, 'utf8');
+    const m = html.match(/rel="apple-touch-icon" href="data:image\/png;base64,([^"]+)"/);
+    if (m) iconoCache = Buffer.from(m[1], 'base64');
+  } catch (e) { /* sin ícono, no es grave */ }
+  return iconoCache;
+}
+
+app.get('/panel/icono.png', (req, res) => {
+  const png = iconoPanel();
+  if (!png) return res.status(404).end();
+  res.type('png').set('Cache-Control', 'public, max-age=86400').send(png);
+});
+
+// El navegador pide /favicon.ico solo; sin esto quedaba un 404 en la consola.
+app.get('/favicon.ico', (req, res) => {
+  const png = iconoPanel();
+  if (!png) return res.status(204).end();
+  res.type('png').set('Cache-Control', 'public, max-age=86400').send(png);
+});
+
+app.get('/panel/manifest.webmanifest', (req, res) => {
+  res.type('application/manifest+json').json({
+    name: 'JOPEX Panel',
+    short_name: 'JOPEX',
+    description: 'Panel de gestión de la tienda JOPEX',
+    start_url: '/panel',
+    scope: '/panel',
+    display: 'standalone',
+    orientation: 'any',
+    background_color: '#070b14',
+    theme_color: '#070b14',
+    lang: 'es-AR',
+    icons: [
+      { src: '/panel/icono.png', sizes: '256x256', type: 'image/png', purpose: 'any' },
+      { src: '/panel/icono.png', sizes: '256x256', type: 'image/png', purpose: 'maskable' },
+    ],
+  });
+});
+
+// Ping liviano: sirve para despertar el servicio antes de entrar al panel.
+app.get('/ping', (req, res) => res.json({ ok: true, en: new Date().toISOString() }));
 
 app.get('/panel/login', (req, res) => res.type('html').send(paginaLogin(null)));
 
@@ -261,7 +320,10 @@ app.get('/panel', (req, res) => {
   }
   // Le avisamos al panel que corre en modo web: así guarda en el servidor
   // en lugar de quedarse solo en el navegador.
+  // Y le agregamos el manifiesto, que es lo que hace que "Agregar a pantalla de
+  // inicio" instale JOPEX como una app: con su ícono, sin barra del navegador.
   html = html.replace('</head>',
+    '<link rel="manifest" href="/panel/manifest.webmanifest">' +
     '<script>window.JOPEX_WEB=true;window.JOPEX_API="";</script></head>');
   res.type('html').send(html);
 });

@@ -3741,6 +3741,18 @@ function JopexPanel() {
   const [sel, setSel] = useState({ costos: '', investigacion: '', stock: '' });
   const elegir = (mod, id) => setSel(p => ({ ...p, [mod]: id }));
 
+  // ---- Menú lateral como cajón deslizable en celular/tablet ----
+  const [menuAbierto, setMenuAbierto] = useState(false);
+  const esChico = () => typeof window !== 'undefined'
+    && window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
+  const cerrarSiChico = () => { if (esChico()) setMenuAbierto(false); };
+  // Con el cajón abierto, el fondo no debe scrollear.
+  React.useEffect(() => {
+    if (typeof document === 'undefined') return;
+    document.body.style.overflow = menuAbierto ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [menuAbierto]);
+
   // Submenús del menú lateral
   const subCostos = productos.map(p => ({
     id: p.id,
@@ -4636,6 +4648,10 @@ function JopexPanel() {
         .nav-subitem.active {
           background: rgba(61,220,60,0.1); color: var(--lime); font-weight: 600;
         }
+        .nav-subitem-txt {
+          min-width: 0; flex: 1; overflow: hidden;
+          white-space: nowrap; text-overflow: ellipsis;
+        }
         .punto-alerta {
           width: 6px; height: 6px; border-radius: 50%; background: var(--red-glow);
           flex-shrink: 0;
@@ -4682,18 +4698,152 @@ function JopexPanel() {
           border-color: rgba(255,77,94,0.3);
         }
         .jopex-sidebar { display: flex; flex-direction: column; }
+
+        /* =====================================================================
+           VERSIÓN CELULAR / TABLET
+           Mismo panel, misma información: cambia cómo se acomoda en pantalla
+           chica. El menú lateral pasa a ser un cajón que se abre con el botón
+           del encabezado; las grillas anchas pasan a una columna; los campos
+           usan 16px para que iOS no haga zoom solo al tocarlos.
+           ===================================================================== */
+        .menu-btn {
+          display: none; align-items: center; gap: 9px;
+          position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+          background: var(--panel-2); border: 1px solid var(--border-soft);
+          color: var(--text-primary); border-radius: 10px;
+          padding: 8px 12px; min-height: 40px; cursor: pointer;
+          font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 600;
+          max-width: 52vw; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+        }
+        .menu-btn .barras { display: flex; flex-direction: column; gap: 3px; flex-shrink: 0; }
+        .menu-btn .barras i { display: block; width: 16px; height: 2px; background: var(--lime); border-radius: 2px; }
+        .menu-btn-txt { overflow: hidden; text-overflow: ellipsis; }
+        .menu-tapa { display: none; }
+        .cerrar-menu { display: none; }
+
+        @media (max-width: 900px) {
+          .jopex-root { min-height: 100dvh; }
+          .menu-btn { display: flex; }
+          .jopex-header {
+            position: sticky; top: 0; z-index: 40;
+            height: 58px; padding: 0 12px;
+            padding-top: env(safe-area-inset-top);
+            height: calc(58px + env(safe-area-inset-top));
+          }
+          .jopex-header .logo-wrap img { height: 32px; }
+
+          /* El cuerpo deja de ser dos columnas: scrollea la página entera. */
+          .jopex-body { display: block; }
+          .jopex-main { overflow: visible; padding: 16px 12px calc(56px + env(safe-area-inset-bottom)); }
+
+          .jopex-sidebar {
+            position: fixed; top: 0; left: 0; bottom: 0; z-index: 60;
+            width: 280px; max-width: 86vw;
+            overflow-y: auto; -webkit-overflow-scrolling: touch;
+            padding: calc(14px + env(safe-area-inset-top)) 12px calc(20px + env(safe-area-inset-bottom));
+            border-right: 1px solid var(--border-soft);
+            box-shadow: 0 0 44px rgba(0,0,0,0.65);
+            transform: translateX(-102%);
+            transition: transform 0.22s ease;
+          }
+          .jopex-sidebar.abierto { transform: translateX(0); }
+          .menu-tapa {
+            display: block; position: fixed; inset: 0; z-index: 55;
+            background: rgba(3,7,15,0.62);
+          }
+          .cerrar-menu {
+            display: flex; align-items: center; justify-content: center;
+            width: 34px; height: 34px; margin: 0 0 10px auto;
+            background: var(--panel); border: 1px solid var(--border-soft);
+            color: var(--text-secondary); border-radius: 9px;
+            font-size: 18px; line-height: 1; cursor: pointer; font-family: inherit;
+          }
+          /* Objetivos táctiles cómodos */
+          .nav-item { padding: 13px 12px; font-size: 15px; }
+          .nav-subitem { padding: 11px 8px; font-size: 13.5px; }
+
+          /* Encabezado del módulo, más compacto */
+          .module-header h1 { font-size: 22px; }
+          .module-header p { font-size: 13px; margin-bottom: 16px; }
+
+          /* Todo lo que era de varias columnas pasa a una */
+          .costo-cards-grid { grid-template-columns: 1fr; gap: 12px; }
+          .costo-card { padding: 14px 13px; border-radius: 11px; }
+          .cotiz-grupo-body { grid-template-columns: 1fr; }
+          .cotiz-fields-grid { grid-template-columns: 1fr 1fr; }
+          .promo-fields { grid-template-columns: 1fr 1fr; max-width: none; }
+          .kpi-row { grid-template-columns: 1fr 1fr; gap: 10px; }
+          .stock-params-grid { grid-template-columns: 1fr 1fr; }
+          .rango-grid, .viabilidad-out { grid-template-columns: 1fr 1fr; }
+          .costo-out-grid { grid-template-columns: 1fr 1fr; }
+          .precio-hero { font-size: 26px; }
+          .kpi-value { font-size: 20px; }
+
+          /* Campos: 16px evita que el celular haga zoom al tocarlos */
+          .jopex-root input, .jopex-root select, .jopex-root textarea { font-size: 16px; }
+          .calc-field-input, .cotiz-proveedor-input, .stock-producto-select { min-height: 42px; }
+          .jopex-root button { min-height: 40px; }
+          .icon-btn, .cerrar-menu { min-height: 0; }
+          .respaldo-btns { flex-wrap: wrap; }
+          .respaldo-btn { min-width: 46%; }
+
+          /* Tablas anchas: se deslizan con el dedo y se avisa que se puede */
+          .table-scroll, .comparador-scroll {
+            overflow-x: auto; -webkit-overflow-scrolling: touch;
+            border-radius: 8px;
+          }
+          .table-section-header { flex-wrap: wrap; gap: 8px; }
+          .stock-detalle-header, .comparador-head, .lineas-head { flex-wrap: wrap; gap: 8px; }
+          .cotiz-enviar-fila { flex-direction: column; align-items: stretch; }
+          /* El título del producto y el botón de borrar, en la misma línea */
+          .stock-detalle-header { flex-wrap: nowrap; align-items: center; }
+          .stock-detalle-header .stock-producto-title { min-width: 0; flex: 1; font-size: 17px; }
+          .costo-card-title { font-size: 16px; }
+          .cotiz-destino { min-width: 0; }
+          .linea-row { grid-template-columns: 22px 1fr 1fr; }
+        }
+
+        @media (max-width: 480px) {
+          .cotiz-fields-grid, .promo-fields, .rango-grid,
+          .viabilidad-out, .stock-params-grid { grid-template-columns: 1fr; }
+          .kpi-row { grid-template-columns: 1fr; }
+          .costo-out-grid { grid-template-columns: 1fr 1fr; }
+          .jopex-main { padding-left: 10px; padding-right: 10px; }
+          .costo-card { padding: 13px 11px; }
+          .module-header h1 { font-size: 20px; }
+          .precio-hero { font-size: 24px; }
+        }
       `), /*#__PURE__*/React.createElement("header", {
     className: "jopex-header"
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "menu-btn",
+    "aria-label": "Abrir el menú",
+    onClick: () => setMenuAbierto(v => !v)
+  }, /*#__PURE__*/React.createElement("span", { className: "barras" },
+      /*#__PURE__*/React.createElement("i", null),
+      /*#__PURE__*/React.createElement("i", null),
+      /*#__PURE__*/React.createElement("i", null)),
+     /*#__PURE__*/React.createElement("span", { className: "menu-btn-txt" },
+      (MODULES.find(x => x.id === active) || {}).label || 'Menú')
+  ), /*#__PURE__*/React.createElement("div", {
     className: "logo-wrap"
   }, /*#__PURE__*/React.createElement("img", {
     src: LOGO_SRC,
     alt: "JOPEX"
   }))), /*#__PURE__*/React.createElement("div", {
     className: "jopex-body"
-  }, /*#__PURE__*/React.createElement("nav", {
-    className: "jopex-sidebar"
-  }, MODULES.map(m => {
+  }, menuAbierto ? /*#__PURE__*/React.createElement("div", {
+    className: "menu-tapa",
+    onClick: () => setMenuAbierto(false)
+  }) : null, /*#__PURE__*/React.createElement("nav", {
+    className: "jopex-sidebar" + (menuAbierto ? " abierto" : "")
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "cerrar-menu",
+    "aria-label": "Cerrar el menú",
+    onClick: () => setMenuAbierto(false)
+  }, "\u2715"), MODULES.map(m => {
     const Icon = m.icon;
     const sub = m.id === 'costos' ? subCostos
       : (m.id === 'investigacion' ? clavesInv
@@ -4703,22 +4853,23 @@ function JopexPanel() {
       /*#__PURE__*/React.createElement("button", {
         type: "button",
         className: `nav-item ${active === m.id ? 'active' : ''}`,
-        onClick: () => setActive(m.id)
+        onClick: () => { setActive(m.id); if (!sub) cerrarSiChico(); }
       }, /*#__PURE__*/React.createElement(Icon, { size: 18 }), m.label,
          sub ? /*#__PURE__*/React.createElement("span", { className: "nav-count" }, sub.length) : null),
       abierto && /*#__PURE__*/React.createElement("div", { className: "nav-sub" },
         /*#__PURE__*/React.createElement("button", {
           type: "button",
           className: `nav-subitem ${!sel[m.id] ? 'active' : ''}`,
-          onClick: () => elegir(m.id, '')
+          onClick: () => { elegir(m.id, ''); cerrarSiChico(); }
         }, "Ver todos"),
         sub.map(s => /*#__PURE__*/React.createElement("button", {
           key: s.id,
           type: "button",
           title: s.label,
           className: `nav-subitem ${sel[m.id] === s.id ? 'active' : ''}`,
-          onClick: () => elegir(m.id, s.id)
-        }, s.alerta ? /*#__PURE__*/React.createElement("span", { className: "punto-alerta" }) : null, s.label))));
+          onClick: () => { elegir(m.id, s.id); cerrarSiChico(); }
+        }, s.alerta ? /*#__PURE__*/React.createElement("span", { className: "punto-alerta" }) : null,
+           /*#__PURE__*/React.createElement("span", { className: "nav-subitem-txt" }, s.label)))));
   }), /*#__PURE__*/React.createElement(RespaldoBloque, null)), /*#__PURE__*/React.createElement("main", {
     className: "jopex-main"
   }, /*#__PURE__*/React.createElement(ModulePanel, {
@@ -4747,9 +4898,26 @@ function JopexPanel() {
   // En modo web traemos primero el estado guardado en el servidor, para que el
   // panel se dibuje ya con tus datos y no con los de este navegador.
   if (MODO_WEB) {
-    rootEl.innerHTML = '<div style="min-height:100vh;display:grid;place-items:center;' +
-      'font-family:system-ui,sans-serif;color:#8ca3c4;font-size:14px">Cargando tus datos…</div>';
-    cargarEstadoDelServidor().then(montar).catch(montar);
+    // Pantalla de arranque. En el plan gratuito el servidor se duerme si nadie
+    // lo usa por un rato: la primera entrada del día puede tardar ~1 minuto en
+    // despertarlo. Sin este aviso parecería que la app se colgó.
+    rootEl.innerHTML =
+      '<div id="jopex-boot" style="min-height:100dvh;display:grid;place-items:center;padding:24px;' +
+      'font-family:system-ui,-apple-system,sans-serif;color:#8ca3c4;text-align:center">' +
+      '<div><div style="width:34px;height:34px;margin:0 auto 16px;border-radius:50%;' +
+      'border:3px solid rgba(140,163,196,0.25);border-top-color:#3ddc3c;' +
+      'animation:jopexGiro 0.9s linear infinite"></div>' +
+      '<div style="font-size:14px;color:#eaf2ff">Cargando tus datos…</div>' +
+      '<div id="jopex-boot-lento" style="font-size:12.5px;margin-top:10px;line-height:1.5;' +
+      'max-width:320px;display:none">El servidor estaba en reposo y se está ' +
+      'despertando. La primera entrada puede tardar hasta un minuto.</div></div></div>' +
+      '<style>@keyframes jopexGiro{to{transform:rotate(360deg)}}</style>';
+    var avisoLento = setTimeout(function () {
+      var el = document.getElementById('jopex-boot-lento');
+      if (el) el.style.display = 'block';
+    }, 3500);
+    var listo = function () { clearTimeout(avisoLento); montar(); };
+    cargarEstadoDelServidor().then(listo).catch(listo);
   } else {
     montar();
   }
