@@ -14,8 +14,23 @@ const axios = require('axios');
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
+// El servidor de Render corre en UTC, pero el negocio está en Argentina (UTC-3).
+// Sin esto, después de las 21:00 hora argentina el servidor ya cuenta el día
+// siguiente, y una venta de la noche se imputaría al día equivocado.
+const TZ_AR = 'America/Argentina/Buenos_Aires';
+const fmtAR = new Intl.DateTimeFormat('en-CA', {
+  timeZone: TZ_AR, year: 'numeric', month: '2-digit', day: '2-digit'
+});
+
+// Devuelve la fecha de un instante EN HORA ARGENTINA, como {anio, mes, dia, iso}
+function fechaAR(d) {
+  const iso = fmtAR.format(d || new Date()); // en-CA da YYYY-MM-DD
+  const [anio, mes, dia] = iso.split('-').map(Number);
+  return { anio, mes, dia, iso };
+}
+
 function diasDelMes(anio, mesIdx) {
-  return new Date(anio, mesIdx + 1, 0).getDate();
+  return new Date(Date.UTC(anio, mesIdx + 1, 0)).getUTCDate();
 }
 
 module.exports = (app) => {
@@ -33,11 +48,15 @@ module.exports = (app) => {
       // Qué estados cuentan como venta. Por defecto solo 'paid'.
       // El panel de métricas de ML puede contar otros estados, por eso es configurable.
       const estadosOk = String(req.query.estados || 'paid').split(',').map(s => s.trim()).filter(Boolean);
+      // Todo el cálculo de fechas se hace en hora argentina, no en la del servidor.
+      const hoyAR = fechaAR();
       const hasta = new Date();
-      const desde = new Date();
-      desde.setMonth(desde.getMonth() - meses);
-      desde.setDate(1);
-      desde.setHours(0, 0, 0, 0);
+      // Primer día del mes, "meses" atrás, en hora argentina
+      let anioDesde = hoyAR.anio;
+      let mesDesde = hoyAR.mes - meses; // 1..12
+      while (mesDesde <= 0) { mesDesde += 12; anioDesde -= 1; }
+      // 03:00 UTC = 00:00 en Argentina
+      const desde = new Date(Date.UTC(anioDesde, mesDesde - 1, 1, 3, 0, 0));
 
       // ---- Traer TODAS las órdenes del período (paginado) ----
       const todas = [];
@@ -81,9 +100,10 @@ module.exports = (app) => {
         const pagada = estadosOk.includes(st);
         if (!pagada) { ignoradasCanceladas++; return; }
         contadasPagadas++;
-        const f = new Date(o.date_created);
-        const claveMes = f.getFullYear() + '-' + String(f.getMonth() + 1).padStart(2, '0');
-        const claveDia = f.toISOString().slice(0, 10);
+        // La fecha de la orden también se interpreta en hora argentina.
+        const fAR = fechaAR(new Date(o.date_created));
+        const claveMes = fAR.anio + '-' + String(fAR.mes).padStart(2, '0');
+        const claveDia = fAR.iso;
 
         (o.order_items || []).forEach((it) => {
           const id = it.item?.id;
@@ -105,16 +125,27 @@ module.exports = (app) => {
       });
 
       // ---- Armar la serie de meses continua (incluye meses sin ventas) ----
+      const claveMesActual = hoyAR.anio + '-' + String(hoyAR.mes).padStart(2, '0');
+      const diasTranscurridosMesActual = hoyAR.dia; // hoy es el día N del mes, en Argentina
       const serieMeses = [];
-      const cursor = new Date(desde);
-      while (cursor <= hasta) {
+      const cursor = new Date(Date.UTC(anioDesde, mesDesde - 1, 1, 12, 0, 0));
+      const finSerie = new Date(Date.UTC(hoyAR.anio, hoyAR.mes - 1, 1, 12, 0, 0));
+      while (cursor <= finSerie) {
+        const clave = cursor.getUTCFullYear() + '-' + String(cursor.getUTCMonth() + 1).padStart(2, '0');
+        const esMesActual = clave === claveMesActual;
+        const calendario = diasDelMes(cursor.getUTCFullYear(), cursor.getUTCMonth());
         serieMeses.push({
-          clave: cursor.getFullYear() + '-' + String(cursor.getMonth() + 1).padStart(2, '0'),
-          mes: MESES[cursor.getMonth()],
-          anio: cursor.getFullYear(),
-          dias_calendario: diasDelMes(cursor.getFullYear(), cursor.getMonth()),
+          clave,
+          mes: MESES[cursor.getUTCMonth()],
+          anio: cursor.getUTCFullYear(),
+          es_mes_actual: esMesActual,
+          dias_calendario: calendario,
+          // Para el mes en curso hay que dividir por los días TRANSCURRIDOS, no por
+          // el mes entero: si no, el ritmo del mes actual queda subestimado y el
+          // modelo de stock termina pidiendo de menos.
+          dias_transcurridos: esMesActual ? diasTranscurridosMesActual : calendario,
         });
-        cursor.setMonth(cursor.getMonth() + 1);
+        cursor.setUTCMonth(cursor.getUTCMonth() + 1);
       }
 
       const items = Object.values(porItem).map((x) => ({
@@ -126,9 +157,12 @@ module.exports = (app) => {
           anio: m.anio,
           clave: m.clave,
           unidades: x.meses[m.clave] || 0,
-          // Días de calendario del mes. OJO: el modelo de stock usa "días CON STOCK",
-          // que puede ser menor si hubo quiebre. Ese ajuste lo hace el usuario.
+          es_mes_actual: m.es_mes_actual,
           dias_calendario: m.dias_calendario,
+          // Días a usar como divisor: el mes entero, salvo el mes en curso, donde
+          // van los días transcurridos. OJO: el modelo usa "días CON STOCK", que
+          // puede ser menor si hubo quiebre. Ese ajuste lo hace el usuario.
+          dias_transcurridos: m.dias_transcurridos,
         })),
         diarias: Object.keys(x.dias).sort().map((f) => ({ fecha: f, unidades: x.dias[f] })),
       }));
@@ -140,8 +174,10 @@ module.exports = (app) => {
 
       res.json({
         generado_en: new Date().toISOString(),
-        desde: desde.toISOString().slice(0, 10),
-        hasta: hasta.toISOString().slice(0, 10),
+        zona_horaria: TZ_AR,
+        hoy_en_argentina: hoyAR.iso,
+        desde: fechaAR(desde).iso,
+        hasta: hoyAR.iso,
         estados_contados: estadosOk,
         ordenes_leidas: todas.length,
         ordenes_pagadas: contadasPagadas,
