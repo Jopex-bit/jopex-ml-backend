@@ -485,7 +485,7 @@ const TABLES = {
 };
 const MODULE_DESC = {
   costos: 'Precio, costo del último lote, margen neto y ROAS mínimo teórico por producto. Incluye historial de lotes y promociones.',
-  ads: 'Carga semanal por publicación: ROAS objetivo, métricas reales, ACOS, TACOS y notas de incidencias. Variación automática vs. semana anterior.',
+  ads: 'Objetivo, margen real y ROAS/ACOS aceptable por publicación. El margen sale de Costos; el objetivo y el ROAS los definís vos.',
   evolucion: 'Flujo de caja neto mensual de toda la tienda, replicando la hoja FLUJO: Subtotal, Utilidad Bruta y Resultado Neto calculados mes a mes.',
   investigacion: 'Cotizaciones de proveedores por producto candidato: landed cost estimado antes de comprar, comparando varias ofertas a la vez.',
   stock: 'Modelo Min-Max con cobertura: D, L, SS, Mínimo y Máximo calculados de tu historial real de ventas y envíos. Alerta cuando el Total Disponible cae debajo del Mínimo.'
@@ -3404,6 +3404,448 @@ function GenericModulePanel({
     className: "sub-empty"
   }, "Se define al cargar el primer registro."))));
 }
+// ---------------------------------------------------------------------------
+// ADS — Fase 1 (Preparación), hito 2:
+//   "Definición de objetivos, margen objetivo y ACOS/ROAS aceptable"
+//
+// El panel NO decide nada. Vos marcás el objetivo de cada publicación y el panel
+// te muestra la consecuencia en plata, leyendo el margen real desde Costos.
+//
+// La cadena es siempre la misma:
+//   margen real (con promo si hay)  ->  qué parte de ese margen le das a Ads
+//   ->  ese resultado ES el ACOS objetivo (% del precio)  ->  ROAS = 100 / ACOS
+//
+// El margen real es el TECHO absoluto: entregarlo entero es ROAS de equilibrio,
+// donde no ganás nada. Por eso nunca se trabaja ahí.
+// ---------------------------------------------------------------------------
+const ROLES_ADS = [{
+  id: 'visibilidad',
+  label: 'Visibilidad',
+  hint: 'Recién publicado o sin historial. Comprás datos y posición, no ganancia.'
+}, {
+  id: 'crecimiento',
+  label: 'Crecimiento',
+  hint: 'Demanda comprobada y stock que acompaña. Empujás volumen resignando parte del margen.'
+}, {
+  id: 'rentabilidad',
+  label: 'Rentabilidad',
+  hint: 'Ya se vende. Ads sostiene, no empuja. Te quedás con casi toda la ganancia.'
+}, {
+  id: 'sin_ads',
+  label: 'Sin publicidad',
+  hint: 'El margen no da para pagar Ads. Primero se arregla el precio o el costo.'
+}];
+const POLITICA_DEFECTO = { visibilidad: 60, crecimiento: 45, rentabilidad: 15 };
+const ESCALERA_REF = [100, 75, 60, 50, 40, 30, 20, 15, 10];
+
+// Saca de Costos lo único que Ads necesita: precio y margen VIGENTES, o sea con
+// la promo aplicada si está activa. Si hay promo, el margen real baja y el piso
+// del ROAS sube: exigirle el ROAS del margen limpio sería creerse rentable sin serlo.
+function datosAdsDe(p) {
+  const r = calcularCosto(p);
+  if (!r || r.error) return null;
+  const hayPromo = !!r.promo;
+  const precio = hayPromo ? r.promo.precioFinal : r.precio;
+  const margen = hayPromo ? r.promo.margenRealPromo : r.margenReal;
+  const ganancia = hayPromo ? r.promo.gananciaNetaPromo : r.reciboPorVenta;
+  return {
+    precio, margen, ganancia, hayPromo,
+    promoPct: hayPromo ? r.promo.promoPct : 0,
+    precioSinPromo: r.precio,
+    margenSinPromo: r.margenReal,
+    piso: margen > 0 ? 100 / margen : null
+  };
+}
+
+// Una fila de la escalera: qué significa entregarle a Ads el `frac`% de tu margen.
+function filaEscalera(d, frac) {
+  const acos = d.margen * frac / 100;      // el ACOS objetivo ES el % del precio
+  const paga = d.precio * acos / 100;
+  return {
+    frac,
+    acos,
+    roas: acos > 0 ? 100 / acos : null,
+    paga,
+    queda: d.ganancia - paga
+  };
+}
+
+function FichaAds({ p, pub, guardar, politica, stock }) {
+  const d = datosAdsDe(p);
+  const rol = pub.rol || '';
+  const roasTexto = pub.roasObjetivo == null ? '' : String(pub.roasObjetivo);
+  const roasNum = Number(String(roasTexto).replace(',', '.'));
+  const hayRoas = roasTexto !== '' && !isNaN(roasNum) && roasNum > 0;
+
+  const cabecera = /*#__PURE__*/React.createElement("div", { className: "costo-card-header" },
+    /*#__PURE__*/React.createElement("h3", { className: "costo-card-title" }, p.nombre || '(sin nombre)'));
+
+  if (!d) {
+    return /*#__PURE__*/React.createElement("div", { className: "costo-card" }, cabecera,
+      /*#__PURE__*/React.createElement("div", { className: "aviso-salto" },
+        "Faltan datos en Costos para esta publicación (valor de adquisición, envío, cargo, financiación y margen). ",
+        "Sin margen real no se puede definir ningún ROAS: completala en Costos y volvé."));
+  }
+
+  const margenNegativo = !(d.margen > 0);
+
+  // --- Selector de objetivo (lo marcás vos, no lo sugiere el panel) ---
+  const bloqueRol = /*#__PURE__*/React.createElement("div", { className: "rol-bloque" },
+    /*#__PURE__*/React.createElement("h4", null, "Objetivo de esta publicación"),
+    /*#__PURE__*/React.createElement("div", { className: "rol-opciones" },
+      ROLES_ADS.map(r => /*#__PURE__*/React.createElement("button", {
+        key: r.id,
+        type: "button",
+        className: "rol-btn" + (rol === r.id ? " activa" : "") + (r.id === 'sin_ads' ? " rol-btn-off" : ""),
+        onClick: () => guardar({ rol: rol === r.id ? '' : r.id })
+      },
+        /*#__PURE__*/React.createElement("span", { className: "rol-check" }, rol === r.id ? "✓" : ""),
+        /*#__PURE__*/React.createElement("span", { className: "rol-nombre" }, r.label)))),
+    rol ? /*#__PURE__*/React.createElement("p", { className: "rol-hint" },
+      (ROLES_ADS.find(r => r.id === rol) || {}).hint) : null);
+
+  // --- De dónde sale el número ---
+  const bloqueMargen = /*#__PURE__*/React.createElement("div", { className: "derivacion" },
+    /*#__PURE__*/React.createElement("h4", null, "Tu margen manda"),
+    /*#__PURE__*/React.createElement("div", { className: "deriv-paso" },
+      /*#__PURE__*/React.createElement("span", { className: "deriv-titulo" }, "Precio y margen vigentes"),
+      d.hayPromo
+        ? /*#__PURE__*/React.createElement("div", { className: "deriv-resultado" },
+            `Con la promo del ${pct(d.promoPct)} activa: precio ${money(d.precio)} (sin promo ${money(d.precioSinPromo)}), ` +
+            `margen real ${pct(d.margen)} (sin promo ${pct(d.margenSinPromo)}).`)
+        : /*#__PURE__*/React.createElement("div", { className: "deriv-resultado" },
+            `Sin promo activa: precio ${money(d.precio)}, margen real ${pct(d.margen)}.`),
+      /*#__PURE__*/React.createElement("div", { className: "deriv-resultado" },
+        `Ganancia por venta antes de publicidad: ${money(d.ganancia)}.`)),
+    margenNegativo
+      ? /*#__PURE__*/React.createElement("div", { className: "control-desc" },
+          "El margen real es cero o negativo. Esta publicación no puede pagar publicidad de ninguna forma: no hay ROAS que la salve. Corregí precio o costo antes de ponerle plata encima.")
+      : /*#__PURE__*/React.createElement("div", { className: "deriv-paso" },
+          /*#__PURE__*/React.createElement("span", { className: "deriv-titulo" }, "Piso absoluto"),
+          /*#__PURE__*/React.createElement("div", { className: "deriv-resultado" },
+            `Entregar el margen entero (${pct(d.margen)} del precio) es ROAS ${d.piso.toFixed(2)}: ahí no ganás nada. ` +
+            `Cualquier ROAS por debajo de ${d.piso.toFixed(2)} te hace perder plata aunque vendas.`)));
+
+  // --- Escalera de referencia ---
+  const fracciones = [];
+  ESCALERA_REF.concat([politica.visibilidad, politica.crecimiento, politica.rentabilidad])
+    .forEach(f => { const n = Number(f); if (n > 0 && n <= 100 && fracciones.indexOf(n) === -1) fracciones.push(n); });
+  fracciones.sort((a, b) => b - a);
+  const marcaDe = (f) => {
+    const ms = [];
+    if (Number(politica.visibilidad) === f) ms.push('Visibilidad');
+    if (Number(politica.crecimiento) === f) ms.push('Crecimiento');
+    if (Number(politica.rentabilidad) === f) ms.push('Rentabilidad');
+    return ms.join(' · ');
+  };
+  const fracDelRol = rol && rol !== 'sin_ads' ? Number(politica[rol]) : null;
+
+  const tabla = margenNegativo ? null : /*#__PURE__*/React.createElement("div", { className: "derivacion" },
+    /*#__PURE__*/React.createElement("h4", null, "Qué ROAS implica cada nivel"),
+    /*#__PURE__*/React.createElement("p", { className: "tramo-nota" },
+      "El ACOS objetivo es, literalmente, qué porcentaje de tu precio le entregás a Ads. ",
+      "El ROAS es su inverso. Son la misma decisión con dos nombres."),
+    /*#__PURE__*/React.createElement("div", { className: "table-scroll" },
+      /*#__PURE__*/React.createElement("table", { className: "escalera-tabla" },
+        /*#__PURE__*/React.createElement("thead", null,
+          /*#__PURE__*/React.createElement("tr", null,
+            /*#__PURE__*/React.createElement("th", null, "Del margen a Ads"),
+            /*#__PURE__*/React.createElement("th", null, "ACOS objetivo"),
+            /*#__PURE__*/React.createElement("th", null, "ROAS objetivo"),
+            /*#__PURE__*/React.createElement("th", null, "Paga hasta / venta"),
+            /*#__PURE__*/React.createElement("th", null, "Te queda / venta"),
+            /*#__PURE__*/React.createElement("th", null, ""))),
+        /*#__PURE__*/React.createElement("tbody", null,
+          fracciones.map(f => {
+            const fila = filaEscalera(d, f);
+            const esDelRol = fracDelRol === f;
+            const esPiso = f === 100;
+            return /*#__PURE__*/React.createElement("tr", {
+              key: f,
+              className: (esDelRol ? 'fila-mejor ' : '') + (esPiso ? 'fila-piso' : '')
+            },
+              /*#__PURE__*/React.createElement("td", null, pct(f)),
+              /*#__PURE__*/React.createElement("td", null, pct(fila.acos)),
+              /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("b", null, fila.roas.toFixed(2))),
+              /*#__PURE__*/React.createElement("td", null, money(fila.paga)),
+              /*#__PURE__*/React.createElement("td", {
+                className: fila.queda <= 0 ? 'queda-cero' : ''
+              }, money(fila.queda)),
+              /*#__PURE__*/React.createElement("td", { className: "escalera-marca" },
+                esPiso ? 'equilibrio' : marcaDe(f)));
+          })))));
+
+  // --- ROAS objetivo, cargado a mano ---
+  let veredicto = null;
+  if (hayRoas && !margenNegativo) {
+    const acos = 100 / roasNum;
+    const delMargen = acos / d.margen * 100;
+    const paga = d.precio * acos / 100;
+    const queda = d.ganancia - paga;
+    const detalle = `ACOS objetivo ${pct(acos)} · le entregás el ${pct(delMargen)} de tu margen · ` +
+      `paga hasta ${money(paga)} por venta · te quedan ${money(queda)}.`;
+    if (roasNum < d.piso) {
+      veredicto = /*#__PURE__*/React.createElement("div", { className: "control-desc aviso-rojo-txt" },
+        `ROAS ${roasNum.toFixed(2)} está por debajo de tu piso de ${d.piso.toFixed(2)}. ` +
+        `Con ese objetivo perdés ${money(Math.abs(queda))} por cada venta que traiga la campaña. ` + detalle);
+    } else if (fracDelRol && delMargen > fracDelRol + 0.5) {
+      veredicto = /*#__PURE__*/React.createElement("div", { className: "control-desc" },
+        `Es más agresivo que tu política de ${(ROLES_ADS.find(r => r.id === rol) || {}).label} ` +
+        `(${pct(fracDelRol)} del margen). ` + detalle);
+    } else {
+      veredicto = /*#__PURE__*/React.createElement("div", { className: "control-ok" }, detalle);
+    }
+  }
+
+  const bloqueRoas = (margenNegativo || rol === 'sin_ads') ? null : /*#__PURE__*/React.createElement("div", { className: "derivacion" },
+    /*#__PURE__*/React.createElement("h4", null, "ROAS objetivo de esta publicación"),
+    /*#__PURE__*/React.createElement("p", { className: "tramo-nota" },
+      "Lo definís vos mirando la tabla de arriba. El panel no lo escribe: solo te dice qué implica."),
+    /*#__PURE__*/React.createElement("div", { className: "costo-out-grid" },
+      /*#__PURE__*/React.createElement(CampoInput, {
+        label: "ROAS objetivo",
+        value: roasTexto,
+        onChange: (v) => guardar({ roasObjetivo: v })
+      })),
+    veredicto);
+
+  const avisoStock = (stock && rol && rol !== 'sin_ads' && rol !== 'rentabilidad' && stock.totalDisponible < stock.Min)
+    ? /*#__PURE__*/React.createElement("div", { className: "control-desc" },
+        `Ojo con el stock: tenés ${stock.totalDisponible} unidades disponibles y tu mínimo es ${stock.Min}. ` +
+        `Empujar esta publicación con objetivo de ${(ROLES_ADS.find(r => r.id === rol) || {}).label} ` +
+        `es pagar publicidad para quebrar antes. Si tenés un lote en camino que el panel no conoce, ignoralo.`)
+    : null;
+
+  const nota = /*#__PURE__*/React.createElement("div", { className: "derivacion" },
+    /*#__PURE__*/React.createElement("h4", null, "Nota"),
+    /*#__PURE__*/React.createElement("textarea", {
+      className: "ads-nota",
+      rows: 2,
+      value: pub.nota || '',
+      placeholder: "Por qué elegiste este objetivo, qué estás probando, qué mirar en el próximo ciclo…",
+      onChange: (e) => guardar({ nota: e.target.value })
+    }));
+
+  return /*#__PURE__*/React.createElement("div", { className: "costo-card" },
+    cabecera, bloqueRol, avisoStock, bloqueMargen, tabla, bloqueRoas, nota);
+}
+
+
+// ---- Campañas reales de Mercado Ads, traídas por el backend ----
+const ESTRATEGIAS_ML = {
+  visibility: 'Visibilidad', increase: 'Crecimiento', profitability: 'Rentabilidad'
+};
+function metricasDerivadas(m) {
+  if (!m) return null;
+  const imp = Number(m.impresiones) || 0, cl = Number(m.clics) || 0;
+  const inv = Number(m.inversion) || 0, ing = Number(m.ingresos) || 0;
+  const v = Number(m.ventas) || 0;
+  return {
+    imp, cl, inv, ing, v,
+    ctr: imp > 0 ? cl / imp * 100 : null,
+    conv: cl > 0 ? v / cl * 100 : null,
+    cpc: cl > 0 ? inv / cl : null,
+    costoVenta: v > 0 ? inv / v : null,
+    roasReal: inv > 0 ? ing / inv : null,
+    acosReal: ing > 0 ? inv / ing * 100 : null
+  };
+}
+
+function CampanaCard({ c, productos }) {
+  const d = metricasDerivadas(c.metricas);
+
+  // Cruce con Costos: el piso de cada publicación de la campaña.
+  const anuncios = (c.anuncios || []).map(a => {
+    const p = productos.find(x => x.mlItemId && x.mlItemId === a.item_id);
+    const da = p ? datosAdsDe(p) : null;
+    return { ...a, enCostos: !!p, piso: da && da.piso ? da.piso : null, margen: da ? da.margen : null };
+  });
+  // El peor alumno manda: el ROAS de la campaña no puede bajar del piso más
+  // exigente de las publicaciones que tiene adentro.
+  const pisos = anuncios.map(a => a.piso).filter(x => x != null);
+  const pisoExigente = pisos.length ? Math.max(...pisos) : null;
+
+  // Semáforo de la campaña
+  let estadoCampana = null;
+  if (d && d.roasReal != null && pisoExigente != null) {
+    if (d.roasReal < pisoExigente) estadoCampana = ['rojo', 'Debajo del piso: la campaña vende a pérdida en su peor publicación.'];
+    else if (c.roas_objetivo && d.roasReal < c.roas_objetivo * 0.9) estadoCampana = ['amarillo', 'Rentable pero por debajo del objetivo configurado.'];
+    else if (c.roas_objetivo && d.roasReal > c.roas_objetivo * 1.3) estadoCampana = ['azul', 'Muy por encima del objetivo: conservador, hay margen para ganar volumen.'];
+    else estadoCampana = ['verde', 'En equilibrio con el objetivo.'];
+  }
+
+  const kpi = (etq, val, sub, tipo) => /*#__PURE__*/React.createElement("div", {
+    className: "kpi-card" + (tipo ? " kpi-" + tipo : "")
+  }, /*#__PURE__*/React.createElement("div", { className: "kpi-label" }, etq),
+     /*#__PURE__*/React.createElement("div", { className: "kpi-value" }, val),
+     sub ? /*#__PURE__*/React.createElement("div", { className: "kpi-sub" }, sub) : null);
+
+  return /*#__PURE__*/React.createElement("div", { className: "costo-card campana-card" },
+    /*#__PURE__*/React.createElement("div", { className: "costo-card-header" },
+      /*#__PURE__*/React.createElement("h3", { className: "costo-card-title" }, c.nombre),
+      /*#__PURE__*/React.createElement("span", {
+        className: "chip" + (String(c.estado) === 'active' ? ' ok' : '')
+      }, c.estado === 'active' ? 'activa' : (c.estado || 's/d'))),
+    /*#__PURE__*/React.createElement("div", { className: "sync-linea" },
+      (c.estrategia ? 'Estrategia: ' + (ESTRATEGIAS_ML[c.estrategia] || c.estrategia) + ' · ' : '') +
+      (c.presupuesto_diario != null ? 'Presupuesto diario: ' + money(c.presupuesto_diario) + ' · ' : '') +
+      (c.acos_objetivo != null ? 'ACOS objetivo: ' + pct(c.acos_objetivo) + ' (ROAS ' + (c.roas_objetivo || '—') + ')' : 'Sin objetivo informado')),
+    pisoExigente != null && /*#__PURE__*/React.createElement("div", { className: "sync-linea" },
+      "Piso de esta campaña (la publicación más exigente): ROAS ",
+      /*#__PURE__*/React.createElement("b", null, pisoExigente.toFixed(2)),
+      c.roas_objetivo && c.roas_objetivo < pisoExigente
+        ? ' — el objetivo configurado está POR DEBAJO de este piso.' : ''),
+    estadoCampana && /*#__PURE__*/React.createElement("div", {
+      className: estadoCampana[0] === 'rojo' ? 'control-desc aviso-rojo-txt'
+        : (estadoCampana[0] === 'amarillo' ? 'control-desc' : 'control-ok')
+    }, (d && d.roasReal != null ? 'ROAS real ' + d.roasReal.toFixed(2) + ' · ' : '') + estadoCampana[1]),
+    d ? /*#__PURE__*/React.createElement("div", { className: "kpi-row campana-kpis" },
+      kpi('Inversión', money(d.inv), d.imp ? d.imp.toLocaleString('es-AR') + ' impresiones' : null),
+      kpi('Ingresos por ads', money(d.ing), d.v ? d.v + ' ventas atribuidas' : null),
+      kpi('ROAS real', d.roasReal != null ? d.roasReal.toFixed(2) : '—',
+        d.acosReal != null ? 'ACOS ' + pct(d.acosReal) : null,
+        estadoCampana ? { rojo: 'red', amarillo: 'amber', verde: 'green', azul: 'blue' }[estadoCampana[0]] : null),
+      kpi('Costo por venta', d.costoVenta != null ? money(d.costoVenta) : '—',
+        d.cpc != null ? 'CPC ' + money(d.cpc) : null),
+      kpi('Embudo', (d.ctr != null ? pct(d.ctr) : '—') + ' · ' + (d.conv != null ? pct(d.conv) : '—'),
+        'CTR · conversión')) : /*#__PURE__*/React.createElement("div", { className: "sync-aviso" },
+      "ML no devolvió métricas para esta campaña en el período pedido."),
+    anuncios.length > 0 && /*#__PURE__*/React.createElement("div", { className: "table-scroll" },
+      /*#__PURE__*/React.createElement("table", { className: "escalera-tabla" },
+        /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null,
+          ['Publicación', 'Estado', 'Ventas', 'Inversión', 'Ingresos', 'ROAS real', 'Piso'].map(h =>
+            /*#__PURE__*/React.createElement("th", { key: h }, h)))),
+        /*#__PURE__*/React.createElement("tbody", null, anuncios.map((a, i) => {
+          const m = metricasDerivadas(a.metricas);
+          const roasA = m && m.roasReal != null ? m.roasReal : null;
+          const mal = roasA != null && a.piso != null && roasA < a.piso;
+          return /*#__PURE__*/React.createElement("tr", { key: a.item_id || i },
+            /*#__PURE__*/React.createElement("td", { className: "campana-item-titulo" }, a.titulo || a.item_id || '—'),
+            /*#__PURE__*/React.createElement("td", null, a.estado || '—'),
+            /*#__PURE__*/React.createElement("td", null, m && m.v != null ? m.v : '—'),
+            /*#__PURE__*/React.createElement("td", null, m && m.inv ? money(m.inv) : '—'),
+            /*#__PURE__*/React.createElement("td", null, m && m.ing ? money(m.ing) : '—'),
+            /*#__PURE__*/React.createElement("td", { className: mal ? 'queda-cero' : '' },
+              roasA != null ? roasA.toFixed(2) : '—'),
+            /*#__PURE__*/React.createElement("td", {
+              className: a.enCostos && a.piso == null ? 'queda-cero' : ''
+            }, a.piso != null ? a.piso.toFixed(2)
+              : (a.enCostos ? 'margen inviable' : 'no está en Costos')));
+        })))));
+}
+
+function CampanasML({ cfg, setCfg, productos }) {
+  const [trayendo, setTrayendo] = useState(false);
+  const [error, setError] = useState('');
+  const sync = cfg.sync || null;
+
+  const sincronizar = async () => {
+    const c = leerCfgBackend();
+    if (!c.url) { setError('Falta configurar la URL del backend (está en el módulo Investigación).'); return; }
+    setTrayendo(true); setError('');
+    try {
+      const base = c.url.replace(/\/+$/, '');
+      const resp = await fetch(base + '/api/ads?dias=30', { headers: c.key ? { 'x-api-key': c.key } : {} });
+      const txt = await resp.text();
+      let json; try { json = JSON.parse(txt); } catch (e) { json = { error: txt.slice(0, 300) }; }
+      if (!resp.ok && !json.habilitado) throw new Error(json.error || json.mensaje || ('HTTP ' + resp.status));
+      setCfg(prev => ({ ...prev, sync: {
+        fecha: new Date().toISOString(),
+        habilitado: json.habilitado !== false,
+        ventana: json.ventana || null,
+        mensaje: json.mensaje || null,
+        campanas: json.campanas || [],
+        diagnostico: json.diagnostico || []
+      } }));
+    } catch (e) {
+      setError(e.message || 'No se pudo sincronizar.');
+    }
+    setTrayendo(false);
+  };
+
+  return /*#__PURE__*/React.createElement("div", { className: "table-section" },
+    /*#__PURE__*/React.createElement("div", { className: "table-section-header" },
+      /*#__PURE__*/React.createElement("h2", null, "Campañas en Mercado Ads"),
+      /*#__PURE__*/React.createElement("button", {
+        type: "button", className: "add-btn sync-btn", disabled: trayendo, onClick: sincronizar
+      }, trayendo ? 'Consultando…' : 'Sincronizar campañas')),
+    error && /*#__PURE__*/React.createElement("div", { className: "competencia-error" }, error),
+    !sync && !error && /*#__PURE__*/React.createElement("p", { className: "tramo-nota" },
+      "Trae de Mercado Libre tus campañas vigentes, qué publicaciones tiene cada una y sus métricas de los últimos 30 días. Nada se carga a mano."),
+    sync && !sync.habilitado && /*#__PURE__*/React.createElement("div", { className: "control-desc" },
+      (sync.mensaje || 'La API de Publicidad no respondió.') +
+      ' Detalle del último intento: ' +
+      ((sync.diagnostico && sync.diagnostico.length)
+        ? sync.diagnostico.map(x => `${x.paso}: ${x.status || 's/c'} ${x.detalle || ''}`).slice(0, 4).join(' · ')
+        : 'sin datos.')),
+    sync && sync.habilitado && /*#__PURE__*/React.createElement(React.Fragment, null,
+      /*#__PURE__*/React.createElement("p", { className: "competencia-fecha" },
+        "Última sincronización: " + new Date(sync.fecha).toLocaleString('es-AR') +
+        (sync.ventana ? ` · período ${sync.ventana.desde} a ${sync.ventana.hasta}` : '')),
+      (sync.campanas || []).length === 0
+        ? /*#__PURE__*/React.createElement("p", { className: "sync-aviso" }, "La cuenta no tiene campañas creadas en Mercado Ads.")
+        : (sync.campanas || []).map(c => /*#__PURE__*/React.createElement(CampanaCard, {
+            key: c.id, c: c, productos: productos }))));
+}
+
+function AdsPanel({ productos, stockProductos, cfg, setCfg, seleccion }) {
+  const politica = Object.assign({}, POLITICA_DEFECTO, cfg.politica || {});
+  const pubs = cfg.pubs || {};
+
+  const setPolitica = (id, valor) => setCfg(prev => ({
+    ...prev,
+    politica: Object.assign({}, POLITICA_DEFECTO, prev.politica || {}, { [id]: valor })
+  }));
+  const guardarPub = (idProd, cambios) => setCfg(prev => ({
+    ...prev,
+    pubs: Object.assign({}, prev.pubs, {
+      [idProd]: Object.assign({}, (prev.pubs || {})[idProd], cambios)
+    })
+  }));
+
+  const lista = seleccion ? productos.filter(p => p.id === seleccion) : productos;
+
+  const bloquePolitica = /*#__PURE__*/React.createElement("div", { className: "table-section" },
+    /*#__PURE__*/React.createElement("div", { className: "table-section-header" },
+      /*#__PURE__*/React.createElement("h2", null, "Tu política — qué parte del margen le entregás a Ads")),
+    /*#__PURE__*/React.createElement("p", { className: "tramo-nota" },
+      "Se define una sola vez y vale para toda la cuenta. No calcula el ROAS por vos: marca en la tabla de cada ",
+      "publicación qué nivel corresponde al objetivo que elegiste. Nunca llega a 100%: ahí no ganás nada."),
+    /*#__PURE__*/React.createElement("div", { className: "costo-out-grid" },
+      ['visibilidad', 'crecimiento', 'rentabilidad'].map(id => /*#__PURE__*/React.createElement(CampoInput, {
+        key: id,
+        label: (ROLES_ADS.find(r => r.id === id) || {}).label,
+        value: String(politica[id]),
+        onChange: (v) => setPolitica(id, v)
+      }))));
+
+  return /*#__PURE__*/React.createElement("div", { className: "module-panel" },
+    /*#__PURE__*/React.createElement("div", { className: "module-header" },
+      /*#__PURE__*/React.createElement("h1", null, "Ads"),
+      /*#__PURE__*/React.createElement("p", null, MODULE_DESC.ads)),
+    bloquePolitica,
+    !seleccion && /*#__PURE__*/React.createElement(CampanasML, {
+      cfg: cfg, setCfg: setCfg, productos: productos }),
+    /*#__PURE__*/React.createElement("div", { className: "table-section-header" },
+      /*#__PURE__*/React.createElement("h2", null, seleccion ? "Publicación seleccionada" : "Publicaciones")),
+    productos.length === 0
+      ? /*#__PURE__*/React.createElement("div", { className: "sub-empty" },
+          "No hay publicaciones cargadas en Costos todavía. La lista de Ads sale de ahí, para que el margen sea siempre el mismo número en los dos módulos.")
+      : /*#__PURE__*/React.createElement("div", { className: "costo-cards-grid" },
+          lista.map(p => {
+            const sp = stockProductos.find(s => (s.nombre || '') === (p.nombre || ''));
+            const stock = sp ? calcularModeloStock(sp) : null;
+            return /*#__PURE__*/React.createElement(FichaAds, {
+              key: p.id,
+              p: p,
+              pub: pubs[p.id] || {},
+              guardar: (c) => guardarPub(p.id, c),
+              politica: politica,
+              stock: stock
+            });
+          })));
+}
+
 function ModulePanel({
   moduleId,
   productos,
@@ -3412,6 +3854,8 @@ function ModulePanel({
   setCotizaciones,
   stockProductos,
   setStockProductos,
+  adsCfg,
+  setAdsCfg,
   sel,
   elegir
 }) {
@@ -3435,6 +3879,13 @@ function ModulePanel({
     setProductos: setStockProductos,
     seleccion: sel.stock
   });
+  if (moduleId === 'ads') return /*#__PURE__*/React.createElement(AdsPanel, {
+    productos: productos,
+    stockProductos: stockProductos,
+    cfg: adsCfg,
+    setCfg: setAdsCfg,
+    seleccion: sel.ads
+  });
   return /*#__PURE__*/React.createElement(GenericModulePanel, {
     moduleId: moduleId
   });
@@ -3454,6 +3905,7 @@ const CLAVES_RESPALDO = [
   'jopex_publicaciones_ml',
   'jopex_tc_comparar',
   'jopex_active_module',
+  'jopex_ads',
   'jopex_backend_url',
   'jopex_backend_key'
 ];
@@ -3737,9 +4189,39 @@ function JopexPanel() {
       window.localStorage.setItem('jopex_stock_productos', JSON.stringify(stockProductos));
     } catch (e) {}
   }, [stockProductos]);
+
+  // Configuración del módulo Ads: tu política de objetivos + lo definido por publicación.
+  const [adsCfg, setAdsCfg] = useState(() => {
+    try {
+      const s = window.localStorage.getItem('jopex_ads');
+      return s ? JSON.parse(s) : { politica: POLITICA_DEFECTO, pubs: {} };
+    } catch (e) { return { politica: POLITICA_DEFECTO, pubs: {} }; }
+  });
+  React.useEffect(() => {
+    try {
+      window.localStorage.setItem('jopex_ads', JSON.stringify(adsCfg));
+    } catch (e) {}
+  }, [adsCfg]);
   // Item seleccionado dentro de cada módulo ('' = ver todos)
   const [sel, setSel] = useState({ costos: '', investigacion: '', stock: '' });
   const elegir = (mod, id) => setSel(p => ({ ...p, [mod]: id }));
+
+  // ---- Módulos plegables ----
+  // Cada módulo con submenú se abre y se cierra tocando su título, sin importar
+  // cuál estés viendo. Se recuerda cómo lo dejaste (solo en este dispositivo).
+  const [abiertos, setAbiertos] = useState(() => {
+    try {
+      const s = window.localStorage.getItem('jopex_menu_abiertos');
+      if (s) return JSON.parse(s);
+    } catch (e) {}
+    // La primera vez, abierto el módulo en el que estás parado.
+    try { return { [window.localStorage.getItem('jopex_active_module') || 'costos']: true }; }
+    catch (e) { return { costos: true }; }
+  });
+  React.useEffect(() => {
+    try { window.localStorage.setItem('jopex_menu_abiertos', JSON.stringify(abiertos)); } catch (e) {}
+  }, [abiertos]);
+  const alternarGrupo = (id) => setAbiertos(p => ({ ...p, [id]: !p[id] }));
 
   // ---- Menú lateral como cajón deslizable en celular/tablet ----
   const [menuAbierto, setMenuAbierto] = useState(false);
@@ -3766,6 +4248,15 @@ function JopexPanel() {
       label: (p.nombre || '(sin nombre)').slice(0, 34),
       alerta: !!(r && r.totalDisponible < r.Min)
     };
+  });
+  // Ads usa la misma lista que Costos: una sola fuente de verdad para el margen.
+  const subAds = productos.map(p => {
+    const d = datosAdsDe(p);
+    const cfgP = (adsCfg.pubs || {})[p.id] || {};
+    const roas = Number(String(cfgP.roasObjetivo == null ? '' : cfgP.roasObjetivo).replace(',', '.'));
+    // Alerta: margen que no soporta publicidad, o un ROAS objetivo por debajo del piso.
+    const alerta = !!d && (!(d.margen > 0) || (roas > 0 && d.piso && roas < d.piso));
+    return { id: p.id, label: (p.nombre || '(sin nombre)').slice(0, 34), alerta };
   });
   const clavesInv = [];
   const vistos = {};
@@ -4648,6 +5139,18 @@ function JopexPanel() {
         .nav-subitem.active {
           background: rgba(61,220,60,0.1); color: var(--lime); font-weight: 600;
         }
+        .nav-item-txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nav-flecha {
+          flex-shrink: 0; font-size: 16px; line-height: 1; color: var(--text-secondary);
+          transform: rotate(90deg); transition: transform 0.18s ease; margin-left: 2px;
+        }
+        .nav-item.desplegado .nav-flecha { transform: rotate(-90deg); }
+        .nav-item.active .nav-flecha { color: var(--lime); }
+        .nav-sub { animation: navAbrir 0.16s ease; }
+        @keyframes navAbrir {
+          from { opacity: 0; transform: translateY(-4px); }
+          to { opacity: 1; transform: none; }
+        }
         .nav-subitem-txt {
           min-width: 0; flex: 1; overflow: hidden;
           white-space: nowrap; text-overflow: ellipsis;
@@ -4698,6 +5201,71 @@ function JopexPanel() {
           border-color: rgba(255,77,94,0.3);
         }
         .jopex-sidebar { display: flex; flex-direction: column; }
+
+        /* ---------------- Módulo Ads ---------------- */
+        .rol-bloque { margin: 4px 0 14px; }
+        .rol-bloque h4 {
+          font-family: 'Rajdhani', sans-serif; font-size: 12.5px; font-weight: 700;
+          text-transform: uppercase; letter-spacing: 0.04em;
+          color: var(--blue-glow); margin: 0 0 9px;
+        }
+        .rol-opciones { display: flex; flex-wrap: wrap; gap: 8px; }
+        .rol-btn {
+          display: flex; align-items: center; gap: 8px;
+          background: var(--panel-2); border: 1px solid var(--border-soft);
+          color: var(--text-secondary); border-radius: 9px;
+          padding: 9px 13px; font-family: inherit; font-size: 13px; cursor: pointer;
+        }
+        .rol-btn:hover { border-color: var(--blue-glow); color: var(--text-primary); }
+        .rol-check {
+          width: 16px; height: 16px; border-radius: 4px; flex-shrink: 0;
+          border: 1px solid var(--border-soft); background: var(--bg);
+          display: grid; place-items: center; font-size: 11px; line-height: 1;
+        }
+        .rol-btn.activa {
+          background: rgba(61,220,60,0.1); border-color: rgba(61,220,60,0.45);
+          color: var(--lime); font-weight: 600;
+        }
+        .rol-btn.activa .rol-check { border-color: var(--lime); color: var(--lime); }
+        .rol-btn-off.activa {
+          background: rgba(140,163,196,0.1); border-color: var(--border-soft);
+          color: var(--text-secondary);
+        }
+        .rol-btn-off.activa .rol-check { border-color: var(--text-secondary); color: var(--text-secondary); }
+        .rol-hint {
+          font-size: 12px; color: var(--text-secondary); line-height: 1.5;
+          margin: 9px 0 0; font-style: italic;
+        }
+        .escalera-tabla { width: 100%; border-collapse: collapse; font-size: 12.5px; white-space: nowrap; }
+        .escalera-tabla th {
+          text-align: left; font-size: 10.5px; text-transform: uppercase;
+          letter-spacing: 0.04em; color: var(--text-secondary);
+          padding: 6px 10px 6px 0; border-bottom: 1px solid var(--border-soft); font-weight: 600;
+        }
+        .escalera-tabla td {
+          padding: 7px 10px 7px 0; color: var(--text-primary);
+          border-bottom: 1px solid rgba(140,163,196,0.07);
+          font-variant-numeric: tabular-nums;
+        }
+        .escalera-tabla tr.fila-piso td { color: var(--text-secondary); opacity: 0.75; }
+        .escalera-tabla td.queda-cero { color: var(--red-glow); }
+        .escalera-marca { font-size: 11px; color: var(--lime); white-space: nowrap; }
+        .escalera-tabla tr.fila-piso .escalera-marca { color: var(--text-secondary); }
+        .control-desc.aviso-rojo-txt {
+          color: var(--red-glow); background: rgba(255,77,94,0.08); border-color: rgba(255,77,94,0.32);
+        }
+        .ads-nota {
+          width: 100%; box-sizing: border-box; resize: vertical;
+          background: var(--panel-2); color: var(--text-primary);
+          border: 1px solid var(--border-soft); border-radius: 8px;
+          padding: 9px 11px; font-family: inherit; font-size: 13px; line-height: 1.5;
+        }
+        .ads-nota:focus { outline: none; border-color: var(--blue-glow); }
+        .campana-card { margin-bottom: 14px; }
+        .campana-kpis { margin: 10px 0 12px; }
+        .campana-item-titulo {
+          max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
 
         /* =====================================================================
            VERSIÓN CELULAR / TABLET
@@ -4795,6 +5363,8 @@ function JopexPanel() {
           .table-section-header { flex-wrap: wrap; gap: 8px; }
           .stock-detalle-header, .comparador-head, .lineas-head { flex-wrap: wrap; gap: 8px; }
           .cotiz-enviar-fila { flex-direction: column; align-items: stretch; }
+          .rol-opciones { flex-direction: column; }
+          .rol-btn { width: 100%; }
           /* El título del producto y el botón de borrar, en la misma línea */
           .stock-detalle-header { flex-wrap: nowrap; align-items: center; }
           .stock-detalle-header .stock-producto-title { min-width: 0; flex: 1; font-size: 17px; }
@@ -4847,15 +5417,24 @@ function JopexPanel() {
     const Icon = m.icon;
     const sub = m.id === 'costos' ? subCostos
       : (m.id === 'investigacion' ? clavesInv
-      : (m.id === 'stock' ? subStock : null));
-    const abierto = active === m.id && sub;
+      : (m.id === 'stock' ? subStock
+      : (m.id === 'ads' ? subAds : null)));
+    const abierto = !!sub && !!abiertos[m.id];
     return /*#__PURE__*/React.createElement("div", { key: m.id, className: "nav-grupo" },
       /*#__PURE__*/React.createElement("button", {
         type: "button",
-        className: `nav-item ${active === m.id ? 'active' : ''}`,
-        onClick: () => { setActive(m.id); if (!sub) cerrarSiChico(); }
-      }, /*#__PURE__*/React.createElement(Icon, { size: 18 }), m.label,
-         sub ? /*#__PURE__*/React.createElement("span", { className: "nav-count" }, sub.length) : null),
+        className: `nav-item ${active === m.id ? 'active' : ''} ${abierto ? 'desplegado' : ''}`,
+        "aria-expanded": sub ? String(abierto) : undefined,
+        onClick: () => {
+          setActive(m.id);
+          // Con submenú: el mismo toque despliega o repliega. Sin submenú no hay
+          // nada que desplegar, así que en el celular cerramos el cajón.
+          if (sub) alternarGrupo(m.id); else cerrarSiChico();
+        }
+      }, /*#__PURE__*/React.createElement(Icon, { size: 18 }),
+         /*#__PURE__*/React.createElement("span", { className: "nav-item-txt" }, m.label),
+         sub ? /*#__PURE__*/React.createElement("span", { className: "nav-count" }, sub.length) : null,
+         sub ? /*#__PURE__*/React.createElement("span", { className: "nav-flecha" }, "\u203A") : null),
       abierto && /*#__PURE__*/React.createElement("div", { className: "nav-sub" },
         /*#__PURE__*/React.createElement("button", {
           type: "button",
@@ -4880,6 +5459,8 @@ function JopexPanel() {
     setCotizaciones: setCotizaciones,
     stockProductos: stockProductos,
     setStockProductos: setStockProductos,
+    adsCfg: adsCfg,
+    setAdsCfg: setAdsCfg,
     sel: sel,
     elegir: elegir
   }))));
