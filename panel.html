@@ -3780,10 +3780,18 @@ function CampanaCard({ c, productos, detalle }) {
         /*#__PURE__*/React.createElement("tbody", null, anuncios.map(filaAnuncio)))));
 }
 
-function CampanasML({ cfg, setCfg, productos }) {
+
+// Barra de sincronización de Ads: período elegible + botón. Se usa tanto en
+// "Ver todos" como adentro de cada campaña, para que siempre tengas dónde
+// actualizar. El período queda guardado y se muestra al lado del resultado:
+// si los números no coinciden con la pantalla de Mercado Ads, lo primero es
+// mirar que el período sea EL MISMO.
+function BarraSyncAds({ cfg, setCfg }) {
   const [trayendo, setTrayendo] = useState(false);
   const [error, setError] = useState('');
-  const sync = cfg.sync || null;
+  const op = Object.assign({ dias: 30, hasta: 'hoy' }, cfg.opciones || {});
+  const setOp = (cambios) => setCfg(prev => ({
+    ...prev, opciones: Object.assign({ dias: 30, hasta: 'hoy' }, prev.opciones, cambios) }));
 
   const sincronizar = async () => {
     const c = leerCfgBackend();
@@ -3791,7 +3799,8 @@ function CampanasML({ cfg, setCfg, productos }) {
     setTrayendo(true); setError('');
     try {
       const base = c.url.replace(/\/+$/, '');
-      const resp = await fetch(base + '/api/ads?dias=30', { headers: c.key ? { 'x-api-key': c.key } : {} });
+      const resp = await fetch(base + '/api/ads?dias=' + op.dias + '&hasta=' + op.hasta,
+        { headers: c.key ? { 'x-api-key': c.key } : {} });
       const txt = await resp.text();
       let json; try { json = JSON.parse(txt); } catch (e) { json = { error: txt.slice(0, 300) }; }
       if (!resp.ok && !json.habilitado) throw new Error(json.error || json.mensaje || ('HTTP ' + resp.status));
@@ -3803,21 +3812,47 @@ function CampanasML({ cfg, setCfg, productos }) {
         campanas: json.campanas || [],
         diagnostico: json.diagnostico || []
       } }));
-    } catch (e) {
-      setError(e.message || 'No se pudo sincronizar.');
-    }
+    } catch (e) { setError(e.message || 'No se pudo sincronizar.'); }
     setTrayendo(false);
   };
 
-  return /*#__PURE__*/React.createElement("div", { className: "table-section" },
-    /*#__PURE__*/React.createElement("div", { className: "table-section-header" },
-      /*#__PURE__*/React.createElement("h2", null, "Campañas en Mercado Ads"),
+  const s = cfg.sync;
+  return /*#__PURE__*/React.createElement("div", { className: "sync-barra" },
+    /*#__PURE__*/React.createElement("div", { className: "sync-barra-controles" },
+      /*#__PURE__*/React.createElement("label", { className: "sync-barra-campo" },
+        /*#__PURE__*/React.createElement("span", null, "Período"),
+        /*#__PURE__*/React.createElement("select", {
+          value: String(op.dias),
+          onChange: e => setOp({ dias: Number(e.target.value) })
+        }, [7, 15, 30, 60, 90].map(d => /*#__PURE__*/React.createElement("option", {
+          key: d, value: d }, "Últimos " + d + " días")))),
+      /*#__PURE__*/React.createElement("label", { className: "sync-barra-campo" },
+        /*#__PURE__*/React.createElement("span", null, "Hasta"),
+        /*#__PURE__*/React.createElement("select", {
+          value: op.hasta,
+          onChange: e => setOp({ hasta: e.target.value })
+        },
+          /*#__PURE__*/React.createElement("option", { value: "hoy" }, "hoy (incluye el día en curso)"),
+          /*#__PURE__*/React.createElement("option", { value: "ayer" }, "ayer (días completos, como ML)"))),
       /*#__PURE__*/React.createElement("button", {
         type: "button", className: "add-btn sync-btn", disabled: trayendo, onClick: sincronizar
-      }, trayendo ? 'Consultando…' : 'Sincronizar campañas')),
+      }, trayendo ? 'Consultando…' : 'Sincronizar')),
     error && /*#__PURE__*/React.createElement("div", { className: "competencia-error" }, error),
-    !sync && !error && /*#__PURE__*/React.createElement("p", { className: "tramo-nota" },
-      "Trae de Mercado Libre tus campañas vigentes, qué publicaciones tiene cada una y sus métricas de los últimos 30 días. Nada se carga a mano."),
+    s && s.habilitado && /*#__PURE__*/React.createElement("p", { className: "competencia-fecha" },
+      "Sincronizado el " + new Date(s.fecha).toLocaleString('es-AR') +
+      (s.ventana ? " · período " + s.ventana.desde + " al " + s.ventana.hasta +
+        (s.ventana.incluye_hoy === false ? " (días completos)" : " (incluye hoy: los números siguen moviéndose)")
+        : "") + " · hora argentina"));
+}
+
+function CampanasML({ cfg, setCfg, productos }) {
+  const sync = cfg.sync || null;
+  return /*#__PURE__*/React.createElement("div", { className: "table-section" },
+    /*#__PURE__*/React.createElement("div", { className: "table-section-header" },
+      /*#__PURE__*/React.createElement("h2", null, "Campañas en Mercado Ads")),
+    /*#__PURE__*/React.createElement(BarraSyncAds, { cfg: cfg, setCfg: setCfg }),
+    !sync && /*#__PURE__*/React.createElement("p", { className: "tramo-nota" },
+      "Trae de Mercado Libre tus campañas, qué publicaciones tiene cada una y sus métricas del período elegido. Nada se carga a mano."),
     sync && !sync.habilitado && /*#__PURE__*/React.createElement("div", { className: "control-desc" },
       (sync.mensaje || 'La API de Publicidad no respondió.') +
       ' Detalle del último intento: ' +
@@ -3825,9 +3860,6 @@ function CampanasML({ cfg, setCfg, productos }) {
         ? sync.diagnostico.map(x => `${x.paso}: ${x.status || 's/c'} ${x.detalle || ''}`).slice(0, 4).join(' · ')
         : 'sin datos.')),
     sync && sync.habilitado && /*#__PURE__*/React.createElement(React.Fragment, null,
-      /*#__PURE__*/React.createElement("p", { className: "competencia-fecha" },
-        "Última sincronización: " + new Date(sync.fecha).toLocaleString('es-AR') +
-        (sync.ventana ? ` · período ${sync.ventana.desde} a ${sync.ventana.hasta}` : '')),
       (sync.campanas || []).length === 0
         ? /*#__PURE__*/React.createElement("p", { className: "sync-aviso" }, "La cuenta no tiene campañas creadas en Mercado Ads.")
         : (sync.campanas || []).map(c => /*#__PURE__*/React.createElement(CampanaCard, {
@@ -3878,6 +3910,7 @@ function AdsPanel({ productos, stockProductos, cfg, setCfg, seleccion }) {
         /*#__PURE__*/React.createElement("h1", null, campSel.nombre),
         /*#__PURE__*/React.createElement("p", null,
           "Campaña de Mercado Ads · métricas del período sincronizado. Elegí \"Ver todos\" en el menú para volver.")),
+      /*#__PURE__*/React.createElement(BarraSyncAds, { cfg: cfg, setCfg: setCfg }),
       /*#__PURE__*/React.createElement(CampanaCard, {
         c: campSel, productos: productos, detalle: true }),
       pubsDeCampana.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null,
@@ -5350,6 +5383,14 @@ function JopexPanel() {
           max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
         .campana-kpis-detalle { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+        .sync-barra { margin-bottom: 12px; }
+        .sync-barra-controles { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+        .sync-barra-campo { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-secondary); }
+        .sync-barra-campo select {
+          background: var(--panel-2); color: var(--text-primary);
+          border: 1px solid var(--border-soft); border-radius: 7px;
+          padding: 8px 10px; font-family: inherit; font-size: 13px;
+        }
 
         /* =====================================================================
            VERSIÓN CELULAR / TABLET
