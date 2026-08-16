@@ -3781,6 +3781,180 @@ function CampanaCard({ c, productos, detalle }) {
 }
 
 
+
+// ---------------------------------------------------------------------------
+// CONTROLES SEMANALES por campaña — el corazón del método.
+// Cada control deja asentada la foto de las métricas + la decisión tomada.
+// La semana siguiente se registra otro control y se compara contra el anterior:
+// ahí se ve si la decisión funcionó y si la campaña avanza de fase o retrocede.
+// ---------------------------------------------------------------------------
+const FASES_ADS = [
+  { id: 'preparacion', label: 'Preparación' },
+  { id: 'lanzamiento', label: 'Lanzamiento base' },
+  { id: 'optimizacion', label: 'Optimización temprana' },
+  { id: 'escalado', label: 'Escalado' },
+  { id: 'consolidacion', label: 'Consolidación' },
+];
+const PALANCAS_ADS = [
+  { id: 'ninguna', label: 'Ninguna — dejar correr' },
+  { id: 'publicacion', label: 'Publicación (fotos, título, precio)' },
+  { id: 'presupuesto', label: 'Presupuesto' },
+  { id: 'roas', label: 'ROAS objetivo' },
+  { id: 'promocion', label: 'Promoción' },
+];
+
+// Flecha de variación contra el control anterior. "bueno" dice hacia dónde es
+// mejora: 'sube' (ventas, ROAS) o 'baja' (ACOS, CPC, costo por venta).
+function DeltaChip({ ahora, antes, bueno, esPct }) {
+  if (ahora == null || antes == null || antes === 0) return null;
+  const dif = (ahora - antes) / Math.abs(antes) * 100;
+  if (!isFinite(dif) || Math.abs(dif) < 0.05) return /*#__PURE__*/React.createElement("span", {
+    className: "delta-chip delta-igual" }, "=");
+  const sube = dif > 0;
+  const mejora = (bueno === 'sube') === sube;
+  return /*#__PURE__*/React.createElement("span", {
+    className: "delta-chip " + (mejora ? "delta-bien" : "delta-mal")
+  }, (sube ? "▲" : "▼") + Math.abs(dif).toFixed(Math.abs(dif) < 10 ? 1 : 0) + "%");
+}
+
+function ControlesCampana({ camp, cfg, setCfg, pisoExigente }) {
+  const lista = ((cfg.controles || {})[camp.id] || []).slice();
+  const dAhora = metricasDerivadas(camp.metricas);
+
+  const guardarLista = (nueva) => setCfg(prev => ({
+    ...prev,
+    controles: Object.assign({}, prev.controles, { [camp.id]: nueva })
+  }));
+
+  const registrar = () => {
+    if (!dAhora) return;
+    const e = {
+      id: 'ctl' + Date.now(),
+      fecha: new Date().toISOString(),
+      ventana: (cfg.sync && cfg.sync.ventana) || null,
+      m: {
+        imp: dAhora.imp, cl: dAhora.cl, inv: dAhora.inv, ing: dAhora.ing, v: dAhora.v,
+        ctr: dAhora.ctr, conv: dAhora.conv, cpc: dAhora.cpc,
+        costoVenta: dAhora.costoVenta, roasReal: dAhora.roasReal, acosReal: dAhora.acosReal
+      },
+      roas_objetivo: camp.roas_objetivo, presupuesto: camp.presupuesto_diario,
+      fase: lista.length ? lista[lista.length - 1].fase : 'optimizacion',
+      palanca: 'ninguna', decision: ''
+    };
+    guardarLista(lista.concat([e]));
+  };
+  const actualizar = (id, cambios) => guardarLista(
+    lista.map(e => e.id === id ? Object.assign({}, e, cambios) : e));
+  const borrar = (id) => {
+    if (typeof window !== 'undefined' && !window.confirm('¿Borrar este control del historial?')) return;
+    guardarLista(lista.filter(e => e.id !== id));
+  };
+
+  // Qué dice el método con los números del último control registrado
+  function indicacion(e, prev) {
+    const r = e.m.roasReal, obj = Number(e.roas_objetivo) || null;
+    if (r == null) return null;
+    if (pisoExigente != null && r < pisoExigente) return ['rojo',
+      `ROAS ${r.toFixed(2)} debajo del piso ${pisoExigente.toFixed(2)}: la campaña pierde plata. ` +
+      'El método dice volver a Preparación: revisar margen, precio o publicación antes de seguir invirtiendo.'];
+    if (prev && prev.palanca && prev.palanca !== 'ninguna') {
+      const dias = Math.round((new Date(e.fecha) - new Date(prev.fecha)) / 86400000);
+      if (dias < 10) return ['amarillo',
+        `El control anterior movió una palanca (${(PALANCAS_ADS.find(p => p.id === prev.palanca) || {}).label}) hace ${dias} días. ` +
+        'El ciclo pide 10-14 días de estabilización antes de evaluar o tocar de nuevo.'];
+    }
+    if (obj && r < obj * 0.9) return ['amarillo',
+      `ROAS ${r.toFixed(2)} debajo del objetivo ${obj}. Optimización temprana: elegí UNA palanca ` +
+      '(primero publicación, después presupuesto, último ROAS), anotala acá y esperá el ciclo.'];
+    if (obj && r > obj * 1.3) return ['azul',
+      `ROAS ${r.toFixed(2)} muy por encima del objetivo ${obj}: estás siendo conservador. ` +
+      'Si el presupuesto se agota temprano, es momento de Escalado: subir presupuesto gradual o bajar ROAS de a 0,5.'];
+    return ['verde',
+      `ROAS ${r.toFixed(2)} en equilibrio con el objetivo${obj ? ' ' + obj : ''}. No tocar nada y dejar correr el ciclo.`];
+  }
+
+  const filasMetricas = [
+    ['ROAS real', e => e.m.roasReal != null ? e.m.roasReal.toFixed(2) : '—', 'roasReal', 'sube'],
+    ['ACOS', e => e.m.acosReal != null ? pct(e.m.acosReal) : '—', 'acosReal', 'baja'],
+    ['Inversión', e => money(e.m.inv), 'inv', null],
+    ['Ingresos', e => money(e.m.ing), 'ing', 'sube'],
+    ['Ventas', e => e.m.v != null ? e.m.v : '—', 'v', 'sube'],
+    ['Impresiones', e => e.m.imp != null ? Number(e.m.imp).toLocaleString('es-AR') : '—', 'imp', 'sube'],
+    ['Clics', e => e.m.cl != null ? Number(e.m.cl).toLocaleString('es-AR') : '—', 'cl', 'sube'],
+    ['CTR', e => e.m.ctr != null ? pct(e.m.ctr) : '—', 'ctr', 'sube'],
+    ['Conversión', e => e.m.conv != null ? pct(e.m.conv) : '—', 'conv', 'sube'],
+    ['CPC', e => e.m.cpc != null ? money(e.m.cpc) : '—', 'cpc', 'baja'],
+    ['Costo por venta', e => e.m.costoVenta != null ? money(e.m.costoVenta) : '—', 'costoVenta', 'baja'],
+  ];
+
+  const ordenada = lista.slice().reverse(); // más nuevo primero
+
+  return /*#__PURE__*/React.createElement("div", { className: "table-section" },
+    /*#__PURE__*/React.createElement("div", { className: "table-section-header" },
+      /*#__PURE__*/React.createElement("h2", null, "Controles semanales"),
+      /*#__PURE__*/React.createElement("button", {
+        type: "button", className: "add-btn", onClick: registrar, disabled: !dAhora,
+        title: dAhora ? '' : 'Sincronizá primero para tener métricas frescas'
+      }, /*#__PURE__*/React.createElement(Plus, { size: 16 }), "Registrar control con las métricas de hoy")),
+    /*#__PURE__*/React.createElement("p", { className: "tramo-nota" },
+      "Cada control congela las métricas del momento y deja escrita la decisión. La semana siguiente, " +
+      "sincronizá, registrá otro control y las flechas te muestran si lo que decidiste funcionó."),
+    ordenada.length === 0 && /*#__PURE__*/React.createElement("div", { className: "sub-empty" },
+      "Sin controles todavía. Sincronizá y registrá el primero: esa foto va a ser tu punto de partida."),
+    ordenada.map((e, i) => {
+      const prev = ordenada[i + 1] || null; // el control anterior en el tiempo
+      const ind = i === 0 ? indicacion(e, prev) : null;
+      return /*#__PURE__*/React.createElement("div", { key: e.id, className: "control-card" },
+        /*#__PURE__*/React.createElement("div", { className: "control-card-head" },
+          /*#__PURE__*/React.createElement("b", null,
+            new Date(e.fecha).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' })),
+          e.ventana ? /*#__PURE__*/React.createElement("span", { className: "control-ventana" },
+            "período " + e.ventana.desde + " al " + e.ventana.hasta) : null,
+          /*#__PURE__*/React.createElement("span", { className: "control-config" },
+            (e.roas_objetivo ? "ROAS obj " + e.roas_objetivo : "") +
+            (e.presupuesto != null ? " · presup. " + money(e.presupuesto) : "")),
+          i === 0 ? /*#__PURE__*/React.createElement("span", { className: "chip ok" }, "último") : null,
+          /*#__PURE__*/React.createElement("button", {
+            type: "button", className: "icon-btn control-borrar",
+            onClick: () => borrar(e.id), "aria-label": "Borrar control"
+          }, /*#__PURE__*/React.createElement(Trash2, { size: 14 }))),
+        /*#__PURE__*/React.createElement("div", { className: "control-metricas" },
+          filasMetricas.map(([etq, fmt, clave, bueno]) =>
+            /*#__PURE__*/React.createElement("div", { key: etq, className: "control-metrica" },
+              /*#__PURE__*/React.createElement("span", { className: "control-metrica-etq" }, etq),
+              /*#__PURE__*/React.createElement("span", { className: "control-metrica-val" }, fmt(e),
+                prev && bueno ? /*#__PURE__*/React.createElement(DeltaChip, {
+                  ahora: e.m[clave], antes: prev.m[clave], bueno: bueno }) : null)))),
+        ind && /*#__PURE__*/React.createElement("div", {
+          className: ind[0] === 'rojo' ? 'control-desc aviso-rojo-txt'
+            : (ind[0] === 'amarillo' ? 'control-desc' : 'control-ok')
+        }, ind[1]),
+        /*#__PURE__*/React.createElement("div", { className: "control-decision" },
+          /*#__PURE__*/React.createElement("label", { className: "sync-barra-campo" },
+            /*#__PURE__*/React.createElement("span", null, "Fase"),
+            /*#__PURE__*/React.createElement("select", {
+              value: e.fase || 'optimizacion',
+              onChange: ev => actualizar(e.id, { fase: ev.target.value })
+            }, FASES_ADS.map(f => /*#__PURE__*/React.createElement("option", {
+              key: f.id, value: f.id }, f.label)))),
+          /*#__PURE__*/React.createElement("label", { className: "sync-barra-campo" },
+            /*#__PURE__*/React.createElement("span", null, "Palanca tocada"),
+            /*#__PURE__*/React.createElement("select", {
+              value: e.palanca || 'ninguna',
+              onChange: ev => actualizar(e.id, { palanca: ev.target.value })
+            }, PALANCAS_ADS.map(f => /*#__PURE__*/React.createElement("option", {
+              key: f.id, value: f.id }, f.label)))),
+          /*#__PURE__*/React.createElement("label", { className: "sync-barra-campo control-decision-txt" },
+            /*#__PURE__*/React.createElement("span", null, "Decisión y por qué"),
+            /*#__PURE__*/React.createElement("textarea", {
+              className: "ads-nota", rows: 2,
+              value: e.decision || '',
+              placeholder: "Qué viste, qué decidiste, qué esperás ver en el próximo control…",
+              onChange: ev => actualizar(e.id, { decision: ev.target.value })
+            }))));
+    }));
+}
+
 // Barra de sincronización de Ads: período elegible + botón. Se usa tanto en
 // "Ver todos" como adentro de cada campaña, para que siempre tengas dónde
 // actualizar. El período queda guardado y se muestra al lado del resultado:
@@ -3913,6 +4087,16 @@ function AdsPanel({ productos, stockProductos, cfg, setCfg, seleccion }) {
       /*#__PURE__*/React.createElement(BarraSyncAds, { cfg: cfg, setCfg: setCfg }),
       /*#__PURE__*/React.createElement(CampanaCard, {
         c: campSel, productos: productos, detalle: true }),
+      /*#__PURE__*/React.createElement(ControlesCampana, {
+        camp: campSel, cfg: cfg, setCfg: setCfg,
+        pisoExigente: (function () {
+          const ps = (campSel.anuncios || []).map(a => {
+            const p = productos.find(x => x.mlItemId && x.mlItemId === a.item_id);
+            const da = p ? datosAdsDe(p) : null;
+            return da && da.piso ? da.piso : null;
+          }).filter(Boolean);
+          return ps.length ? Math.max(...ps) : null;
+        })() }),
       pubsDeCampana.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null,
         /*#__PURE__*/React.createElement("div", { className: "table-section-header" },
           /*#__PURE__*/React.createElement("h2", null, "Definí el objetivo de estas publicaciones")),
@@ -5391,6 +5575,36 @@ function JopexPanel() {
           border: 1px solid var(--border-soft); border-radius: 7px;
           padding: 8px 10px; font-family: inherit; font-size: 13px;
         }
+        .control-card {
+          background: var(--card-bg); border: 1px solid var(--border-soft);
+          border-radius: 11px; padding: 14px 16px; margin-bottom: 12px;
+        }
+        .control-card-head {
+          display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+          margin-bottom: 10px; font-size: 13px; color: var(--text-primary);
+        }
+        .control-ventana, .control-config { font-size: 11.5px; color: var(--text-secondary); }
+        .control-borrar { margin-left: auto; }
+        .control-metricas {
+          display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+          gap: 8px 14px; margin-bottom: 10px;
+        }
+        .control-metrica { display: flex; flex-direction: column; }
+        .control-metrica-etq { font-size: 10.5px; color: var(--text-secondary); }
+        .control-metrica-val {
+          font-size: 14px; font-weight: 600; color: var(--text-primary);
+          font-variant-numeric: tabular-nums; display: flex; align-items: baseline; gap: 6px;
+        }
+        .delta-chip { font-size: 10.5px; font-weight: 700; }
+        .delta-bien { color: var(--lime); }
+        .delta-mal { color: var(--red-glow); }
+        .delta-igual { color: var(--text-secondary); }
+        .control-decision {
+          display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start;
+          border-top: 1px dashed var(--border-soft); padding-top: 10px; margin-top: 4px;
+        }
+        .control-decision-txt { flex: 1; min-width: 240px; }
+        .control-decision-txt textarea { width: 100%; box-sizing: border-box; }
 
         /* =====================================================================
            VERSIÓN CELULAR / TABLET
