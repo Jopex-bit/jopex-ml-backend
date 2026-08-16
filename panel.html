@@ -3651,21 +3651,20 @@ function metricasDerivadas(m) {
   };
 }
 
-function CampanaCard({ c, productos }) {
+function CampanaCard({ c, productos, detalle }) {
   const d = metricasDerivadas(c.metricas);
 
   // Cruce con Costos: el piso de cada publicación de la campaña.
   const anuncios = (c.anuncios || []).map(a => {
     const p = productos.find(x => x.mlItemId && x.mlItemId === a.item_id);
     const da = p ? datosAdsDe(p) : null;
-    return { ...a, enCostos: !!p, piso: da && da.piso ? da.piso : null, margen: da ? da.margen : null };
+    return { ...a, enCostos: !!p, piso: da && da.piso ? da.piso : null };
   });
   // El peor alumno manda: el ROAS de la campaña no puede bajar del piso más
   // exigente de las publicaciones que tiene adentro.
   const pisos = anuncios.map(a => a.piso).filter(x => x != null);
   const pisoExigente = pisos.length ? Math.max(...pisos) : null;
 
-  // Semáforo de la campaña
   let estadoCampana = null;
   if (d && d.roasReal != null && pisoExigente != null) {
     if (d.roasReal < pisoExigente) estadoCampana = ['rojo', 'Debajo del piso: la campaña vende a pérdida en su peor publicación.'];
@@ -3673,12 +3672,80 @@ function CampanaCard({ c, productos }) {
     else if (c.roas_objetivo && d.roasReal > c.roas_objetivo * 1.3) estadoCampana = ['azul', 'Muy por encima del objetivo: conservador, hay margen para ganar volumen.'];
     else estadoCampana = ['verde', 'En equilibrio con el objetivo.'];
   }
+  const colorEstado = estadoCampana ? { rojo: 'red', amarillo: 'amber', verde: 'green', azul: 'blue' }[estadoCampana[0]] : null;
 
   const kpi = (etq, val, sub, tipo) => /*#__PURE__*/React.createElement("div", {
-    className: "kpi-card" + (tipo ? " kpi-" + tipo : "")
+    key: etq, className: "kpi-card" + (tipo ? " kpi-" + tipo : "")
   }, /*#__PURE__*/React.createElement("div", { className: "kpi-label" }, etq),
      /*#__PURE__*/React.createElement("div", { className: "kpi-value" }, val),
      sub ? /*#__PURE__*/React.createElement("div", { className: "kpi-sub" }, sub) : null);
+
+  const num = (x, dec) => x == null ? '—' : Number(x).toLocaleString('es-AR', { maximumFractionDigits: dec == null ? 0 : dec });
+
+  // En el detalle, las mismas fichas y en el mismo orden en que las muestra Mercado Ads.
+  const tiles = !d ? null : (detalle
+    ? [
+        kpi('Impresiones', num(d.imp)),
+        kpi('Clics', num(d.cl)),
+        kpi('CTR', d.ctr != null ? pct(d.ctr) : '—', 'clics / impresiones'),
+        kpi('Inversión', money(d.inv)),
+        kpi('CPC', d.cpc != null ? money(d.cpc) : '—', 'costo por clic'),
+        kpi('Ingresos por publicidad', money(d.ing)),
+        kpi('Ventas por publicidad', num(d.v)),
+        kpi('Conversión', d.conv != null ? pct(d.conv) : '—', 'ventas / clics'),
+        kpi('ROAS real', d.roasReal != null ? d.roasReal.toFixed(2) : '—',
+          d.acosReal != null ? 'ACOS ' + pct(d.acosReal) : null, colorEstado),
+        kpi('Costo por venta', d.costoVenta != null ? money(d.costoVenta) : '—',
+          'inversión / ventas'),
+      ]
+    : [
+        kpi('Inversión', money(d.inv), d.imp ? num(d.imp) + ' impresiones' : null),
+        kpi('Ingresos por ads', money(d.ing), d.v ? num(d.v) + ' ventas atribuidas' : null),
+        kpi('ROAS real', d.roasReal != null ? d.roasReal.toFixed(2) : '—',
+          d.acosReal != null ? 'ACOS ' + pct(d.acosReal) : null, colorEstado),
+        kpi('Costo por venta', d.costoVenta != null ? money(d.costoVenta) : '—',
+          d.cpc != null ? 'CPC ' + money(d.cpc) : null),
+        kpi('Embudo', (d.ctr != null ? pct(d.ctr) : '—') + ' · ' + (d.conv != null ? pct(d.conv) : '—'),
+          'CTR · conversión'),
+      ]);
+
+  const columnas = detalle
+    ? ['Publicación', 'Estado', 'Impresiones', 'Clics', 'CTR', 'CPC', 'Inversión', 'Ventas', 'Ingresos', 'ROAS', 'ACOS', 'Piso']
+    : ['Publicación', 'Estado', 'Ventas', 'Inversión', 'Ingresos', 'ROAS real', 'Piso'];
+
+  const filaAnuncio = (a, i) => {
+    const m = metricasDerivadas(a.metricas);
+    const roasA = m && m.roasReal != null ? m.roasReal : null;
+    const mal = roasA != null && a.piso != null && roasA < a.piso;
+    const celdaPiso = /*#__PURE__*/React.createElement("td", {
+      key: "piso", className: a.enCostos && a.piso == null ? 'queda-cero' : ''
+    }, a.piso != null ? a.piso.toFixed(2) : (a.enCostos ? 'margen inviable' : 'no está en Costos'));
+    const tds = detalle ? [
+      /*#__PURE__*/React.createElement("td", { key: "t", className: "campana-item-titulo" }, a.titulo || a.item_id || '—'),
+      /*#__PURE__*/React.createElement("td", { key: "e" }, a.estado || '—'),
+      /*#__PURE__*/React.createElement("td", { key: "i" }, m ? num(m.imp) : '—'),
+      /*#__PURE__*/React.createElement("td", { key: "c" }, m ? num(m.cl) : '—'),
+      /*#__PURE__*/React.createElement("td", { key: "ctr" }, m && m.ctr != null ? pct(m.ctr) : '—'),
+      /*#__PURE__*/React.createElement("td", { key: "cpc" }, m && m.cpc != null ? money(m.cpc) : '—'),
+      /*#__PURE__*/React.createElement("td", { key: "inv" }, m && m.inv ? money(m.inv) : '—'),
+      /*#__PURE__*/React.createElement("td", { key: "v" }, m && m.v != null ? num(m.v) : '—'),
+      /*#__PURE__*/React.createElement("td", { key: "ing" }, m && m.ing ? money(m.ing) : '—'),
+      /*#__PURE__*/React.createElement("td", { key: "r", className: mal ? 'queda-cero' : '' },
+        roasA != null ? roasA.toFixed(2) : '—'),
+      /*#__PURE__*/React.createElement("td", { key: "a" }, m && m.acosReal != null ? pct(m.acosReal) : '—'),
+      celdaPiso,
+    ] : [
+      /*#__PURE__*/React.createElement("td", { key: "t", className: "campana-item-titulo" }, a.titulo || a.item_id || '—'),
+      /*#__PURE__*/React.createElement("td", { key: "e" }, a.estado || '—'),
+      /*#__PURE__*/React.createElement("td", { key: "v" }, m && m.v != null ? num(m.v) : '—'),
+      /*#__PURE__*/React.createElement("td", { key: "inv" }, m && m.inv ? money(m.inv) : '—'),
+      /*#__PURE__*/React.createElement("td", { key: "ing" }, m && m.ing ? money(m.ing) : '—'),
+      /*#__PURE__*/React.createElement("td", { key: "r", className: mal ? 'queda-cero' : '' },
+        roasA != null ? roasA.toFixed(2) : '—'),
+      celdaPiso,
+    ];
+    return /*#__PURE__*/React.createElement("tr", { key: a.item_id || i }, tds);
+  };
 
   return /*#__PURE__*/React.createElement("div", { className: "costo-card campana-card" },
     /*#__PURE__*/React.createElement("div", { className: "costo-card-header" },
@@ -3699,39 +3766,18 @@ function CampanaCard({ c, productos }) {
       className: estadoCampana[0] === 'rojo' ? 'control-desc aviso-rojo-txt'
         : (estadoCampana[0] === 'amarillo' ? 'control-desc' : 'control-ok')
     }, (d && d.roasReal != null ? 'ROAS real ' + d.roasReal.toFixed(2) + ' · ' : '') + estadoCampana[1]),
-    d ? /*#__PURE__*/React.createElement("div", { className: "kpi-row campana-kpis" },
-      kpi('Inversión', money(d.inv), d.imp ? d.imp.toLocaleString('es-AR') + ' impresiones' : null),
-      kpi('Ingresos por ads', money(d.ing), d.v ? d.v + ' ventas atribuidas' : null),
-      kpi('ROAS real', d.roasReal != null ? d.roasReal.toFixed(2) : '—',
-        d.acosReal != null ? 'ACOS ' + pct(d.acosReal) : null,
-        estadoCampana ? { rojo: 'red', amarillo: 'amber', verde: 'green', azul: 'blue' }[estadoCampana[0]] : null),
-      kpi('Costo por venta', d.costoVenta != null ? money(d.costoVenta) : '—',
-        d.cpc != null ? 'CPC ' + money(d.cpc) : null),
-      kpi('Embudo', (d.ctr != null ? pct(d.ctr) : '—') + ' · ' + (d.conv != null ? pct(d.conv) : '—'),
-        'CTR · conversión')) : /*#__PURE__*/React.createElement("div", { className: "sync-aviso" },
+    !estadoCampana && d && d.roasReal != null && pisoExigente == null &&
+      /*#__PURE__*/React.createElement("div", { className: "control-desc aviso-rojo-txt" },
+        "ROAS real " + d.roasReal.toFixed(2) + " · No se puede evaluar: ninguna publicación de esta campaña tiene margen viable en Costos. Si el margen es cero o negativo, la campaña pierde plata con cualquier ROAS."),
+    tiles ? /*#__PURE__*/React.createElement("div", {
+      className: "kpi-row campana-kpis" + (detalle ? " campana-kpis-detalle" : "")
+    }, tiles) : /*#__PURE__*/React.createElement("div", { className: "sync-aviso" },
       "ML no devolvió métricas para esta campaña en el período pedido."),
     anuncios.length > 0 && /*#__PURE__*/React.createElement("div", { className: "table-scroll" },
       /*#__PURE__*/React.createElement("table", { className: "escalera-tabla" },
         /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null,
-          ['Publicación', 'Estado', 'Ventas', 'Inversión', 'Ingresos', 'ROAS real', 'Piso'].map(h =>
-            /*#__PURE__*/React.createElement("th", { key: h }, h)))),
-        /*#__PURE__*/React.createElement("tbody", null, anuncios.map((a, i) => {
-          const m = metricasDerivadas(a.metricas);
-          const roasA = m && m.roasReal != null ? m.roasReal : null;
-          const mal = roasA != null && a.piso != null && roasA < a.piso;
-          return /*#__PURE__*/React.createElement("tr", { key: a.item_id || i },
-            /*#__PURE__*/React.createElement("td", { className: "campana-item-titulo" }, a.titulo || a.item_id || '—'),
-            /*#__PURE__*/React.createElement("td", null, a.estado || '—'),
-            /*#__PURE__*/React.createElement("td", null, m && m.v != null ? m.v : '—'),
-            /*#__PURE__*/React.createElement("td", null, m && m.inv ? money(m.inv) : '—'),
-            /*#__PURE__*/React.createElement("td", null, m && m.ing ? money(m.ing) : '—'),
-            /*#__PURE__*/React.createElement("td", { className: mal ? 'queda-cero' : '' },
-              roasA != null ? roasA.toFixed(2) : '—'),
-            /*#__PURE__*/React.createElement("td", {
-              className: a.enCostos && a.piso == null ? 'queda-cero' : ''
-            }, a.piso != null ? a.piso.toFixed(2)
-              : (a.enCostos ? 'margen inviable' : 'no está en Costos')));
-        })))));
+          columnas.map(h => /*#__PURE__*/React.createElement("th", { key: h }, h)))),
+        /*#__PURE__*/React.createElement("tbody", null, anuncios.map(filaAnuncio)))));
 }
 
 function CampanasML({ cfg, setCfg, productos }) {
@@ -3803,7 +3849,10 @@ function AdsPanel({ productos, stockProductos, cfg, setCfg, seleccion }) {
     })
   }));
 
-  const lista = seleccion ? productos.filter(p => p.id === seleccion) : productos;
+  // ¿La selección del menú es una campaña sincronizada?
+  const campanas = (cfg.sync && cfg.sync.campanas) || [];
+  const campSel = seleccion ? campanas.find(c => 'c' + c.id === String(seleccion)) : null;
+  const lista = productos;
 
   const bloquePolitica = /*#__PURE__*/React.createElement("div", { className: "table-section" },
     /*#__PURE__*/React.createElement("div", { className: "table-section-header" },
@@ -3819,15 +3868,41 @@ function AdsPanel({ productos, stockProductos, cfg, setCfg, seleccion }) {
         onChange: (v) => setPolitica(id, v)
       }))));
 
+  // ---- Vista de UNA campaña, con el mismo orden de métricas que Mercado Ads ----
+  if (campSel) {
+    const pubsDeCampana = (campSel.anuncios || [])
+      .map(a => productos.find(p => p.mlItemId && p.mlItemId === a.item_id))
+      .filter(Boolean);
+    return /*#__PURE__*/React.createElement("div", { className: "module-panel" },
+      /*#__PURE__*/React.createElement("div", { className: "module-header" },
+        /*#__PURE__*/React.createElement("h1", null, campSel.nombre),
+        /*#__PURE__*/React.createElement("p", null,
+          "Campaña de Mercado Ads · métricas del período sincronizado. Elegí \"Ver todos\" en el menú para volver.")),
+      /*#__PURE__*/React.createElement(CampanaCard, {
+        c: campSel, productos: productos, detalle: true }),
+      pubsDeCampana.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null,
+        /*#__PURE__*/React.createElement("div", { className: "table-section-header" },
+          /*#__PURE__*/React.createElement("h2", null, "Definí el objetivo de estas publicaciones")),
+        /*#__PURE__*/React.createElement("div", { className: "costo-cards-grid" },
+          pubsDeCampana.map(p => {
+            const sp = stockProductos.find(s => (s.nombre || '') === (p.nombre || ''));
+            const stock = sp ? calcularModeloStock(sp) : null;
+            return /*#__PURE__*/React.createElement(FichaAds, {
+              key: p.id, p: p, pub: pubs[p.id] || {},
+              guardar: (cbs) => guardarPub(p.id, cbs),
+              politica: politica, stock: stock });
+          }))));
+  }
+
   return /*#__PURE__*/React.createElement("div", { className: "module-panel" },
     /*#__PURE__*/React.createElement("div", { className: "module-header" },
       /*#__PURE__*/React.createElement("h1", null, "Ads"),
       /*#__PURE__*/React.createElement("p", null, MODULE_DESC.ads)),
     bloquePolitica,
-    !seleccion && /*#__PURE__*/React.createElement(CampanasML, {
+    /*#__PURE__*/React.createElement(CampanasML, {
       cfg: cfg, setCfg: setCfg, productos: productos }),
     /*#__PURE__*/React.createElement("div", { className: "table-section-header" },
-      /*#__PURE__*/React.createElement("h2", null, seleccion ? "Publicación seleccionada" : "Publicaciones")),
+      /*#__PURE__*/React.createElement("h2", null, "Publicaciones")),
     productos.length === 0
       ? /*#__PURE__*/React.createElement("div", { className: "sub-empty" },
           "No hay publicaciones cargadas en Costos todavía. La lista de Ads sale de ahí, para que el margen sea siempre el mismo número en los dos módulos.")
@@ -4249,15 +4324,23 @@ function JopexPanel() {
       alerta: !!(r && r.totalDisponible < r.Min)
     };
   });
-  // Ads usa la misma lista que Costos: una sola fuente de verdad para el margen.
-  const subAds = productos.map(p => {
-    const d = datosAdsDe(p);
-    const cfgP = (adsCfg.pubs || {})[p.id] || {};
-    const roas = Number(String(cfgP.roasObjetivo == null ? '' : cfgP.roasObjetivo).replace(',', '.'));
-    // Alerta: margen que no soporta publicidad, o un ROAS objetivo por debajo del piso.
-    const alerta = !!d && (!(d.margen > 0) || (roas > 0 && d.piso && roas < d.piso));
-    return { id: p.id, label: (p.nombre || '(sin nombre)').slice(0, 34), alerta };
-  });
+  // El submenú de Ads lista las CAMPAÑAS sincronizadas de Mercado Ads,
+  // igual que la pantalla de campañas de ML. Sin sincronizar, no hay submenú.
+  const campanasSync = (adsCfg.sync && adsCfg.sync.campanas) || [];
+  const subAds = campanasSync.length ? campanasSync.map(c => {
+    const anuncios = (c.anuncios || []);
+    // Piso de la campaña: la publicación más exigente que tiene adentro.
+    const pisos = anuncios.map(a => {
+      const p = productos.find(x => x.mlItemId && x.mlItemId === a.item_id);
+      const da = p ? datosAdsDe(p) : null;
+      return da && da.piso ? da.piso : null;
+    }).filter(Boolean);
+    const piso = pisos.length ? Math.max(...pisos) : null;
+    const m = metricasDerivadas(c.metricas);
+    const alerta = !!(m && m.roasReal != null && piso != null && m.roasReal < piso) ||
+      !!(c.roas_objetivo && piso != null && c.roas_objetivo < piso);
+    return { id: 'c' + c.id, label: (c.nombre || ('Campaña ' + c.id)).slice(0, 34), alerta };
+  }) : null;
   const clavesInv = [];
   const vistos = {};
   cotizaciones.forEach(c => {
@@ -5266,6 +5349,7 @@ function JopexPanel() {
         .campana-item-titulo {
           max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
+        .campana-kpis-detalle { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 
         /* =====================================================================
            VERSIÓN CELULAR / TABLET
