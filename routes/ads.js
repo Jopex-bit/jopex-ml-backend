@@ -20,13 +20,20 @@ const axios = require('axios');
 // todo intento fallido queda en `diagnostico`, porque esta API cambia seguido.
 // ---------------------------------------------------------------------------
 
+// Las fechas se calculan en HORA ARGENTINA, no en la del servidor (UTC).
+// Sin esto, después de las 21:00 de Argentina el backend pediría "hasta mañana"
+// y el período nunca coincidiría con el que muestra la pantalla de Mercado Ads.
+const TZ_AR = 'America/Argentina/Buenos_Aires';
+const fmtAR = new Intl.DateTimeFormat('en-CA', {
+  timeZone: TZ_AR, year: 'numeric', month: '2-digit', day: '2-digit'
+});
+function diaAR(msAtras) { return fmtAR.format(new Date(Date.now() - (msAtras || 0))); }
+
 const METRICAS = [
   'clicks', 'prints', 'cost', 'cpc', 'acos',
   'units_quantity', 'direct_units_quantity', 'indirect_units_quantity',
   'total_amount', 'direct_amount', 'indirect_amount',
 ].join(',');
-
-function fechaISO(d) { return d.toISOString().slice(0, 10); }
 
 module.exports = (app) => {
   const router = express.Router();
@@ -39,9 +46,13 @@ module.exports = (app) => {
       const sitio = String(req.query.sitio || 'MLA');
 
       const dias = Math.min(Math.max(Number(req.query.dias) || 30, 1), 90);
-      const hasta = new Date();
-      const desde = new Date(Date.now() - dias * 24 * 3600 * 1000);
-      const rango = { date_from: fechaISO(desde), date_to: fechaISO(hasta) };
+      // hasta=ayer -> período de días COMPLETOS, como suele mostrarlo Mercado Ads.
+      // hasta=hoy  -> incluye lo que va del día (los números siguen moviéndose).
+      const hastaAyer = String(req.query.hasta || 'hoy') === 'ayer';
+      const DIA = 24 * 3600 * 1000;
+      const fin = hastaAyer ? diaAR(DIA) : diaAR(0);
+      const inicio = diaAR((dias - 1) * DIA + (hastaAyer ? DIA : 0));
+      const rango = { date_from: inicio, date_to: fin };
 
       // Un intento contra la API. Si falla por las métricas (400), reintenta sin ellas.
       async function llamar(paso, url, headers, params) {
@@ -189,7 +200,8 @@ module.exports = (app) => {
         habilitado: true,
         advertiser_id: advertiserId,
         sitio,
-        ventana: { desde: rango.date_from, hasta: rango.date_to, dias },
+        ventana: { desde: rango.date_from, hasta: rango.date_to, dias,
+          incluye_hoy: !hastaAyer, zona_horaria: TZ_AR },
         total_campanas: campanas.length,
         total_anuncios: listaAds.length,
         campanas,
