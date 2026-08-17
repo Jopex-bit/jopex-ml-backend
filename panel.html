@@ -3817,9 +3817,35 @@ function DeltaChip({ ahora, antes, bueno, esPct }) {
   }, (sube ? "▲" : "▼") + Math.abs(dif).toFixed(Math.abs(dif) < 10 ? 1 : 0) + "%");
 }
 
-function ControlesCampana({ camp, cfg, setCfg, pisoExigente }) {
+function ControlesCampana({ camp, cfg, setCfg, pisoExigente, productos }) {
   const lista = ((cfg.controles || {})[camp.id] || []).slice();
-  const dAhora = metricasDerivadas(camp.metricas);
+
+  // Qué se registra: la campaña completa (suma) o UNA publicación puntual.
+  // La optimización se trabaja publicación por publicación, así que el control
+  // individual es el importante; el total queda para la mirada general.
+  const [sujeto, setSujeto] = useState('campania');
+  const anuncios = camp.anuncios || [];
+  const anuncioSel = sujeto === 'campania' ? null
+    : anuncios.find(x => String(x.item_id) === String(sujeto));
+  const dAhora = metricasDerivadas(anuncioSel ? anuncioSel.metricas : camp.metricas);
+
+  // Datos de Costos y objetivo propio de la publicación elegida (si existen)
+  function productoDe(itemId) {
+    return productos.find(x => x.mlItemId && String(x.mlItemId) === String(itemId)) || null;
+  }
+  function pisoDe(itemId) {
+    if (itemId == null) return pisoExigente;
+    const p = productoDe(itemId);
+    const da = p ? datosAdsDe(p) : null;
+    return da && da.piso ? da.piso : null;
+  }
+  function objetivoDe(itemId) {
+    if (itemId == null) return camp.roas_objetivo || null;
+    const p = productoDe(itemId);
+    const def = p ? ((cfg.pubs || {})[p.id] || {}).roasObjetivo : null;
+    const n = Number(String(def == null ? '' : def).replace(',', '.'));
+    return n > 0 ? n : (camp.roas_objetivo || null);
+  }
 
   const guardarLista = (nueva) => setCfg(prev => ({
     ...prev,
@@ -3828,16 +3854,21 @@ function ControlesCampana({ camp, cfg, setCfg, pisoExigente }) {
 
   const registrar = () => {
     if (!dAhora) return;
+    const itemId = anuncioSel ? anuncioSel.item_id : null;
     const e = {
       id: 'ctl' + Date.now(),
       fecha: new Date().toISOString(),
       ventana: (cfg.sync && cfg.sync.ventana) || null,
+      sujeto: itemId == null ? 'campania' : itemId,
+      sujeto_titulo: anuncioSel ? (anuncioSel.titulo || anuncioSel.item_id) : 'Campaña completa',
       m: {
         imp: dAhora.imp, cl: dAhora.cl, inv: dAhora.inv, ing: dAhora.ing, v: dAhora.v,
         ctr: dAhora.ctr, conv: dAhora.conv, cpc: dAhora.cpc,
         costoVenta: dAhora.costoVenta, roasReal: dAhora.roasReal, acosReal: dAhora.acosReal
       },
-      roas_objetivo: camp.roas_objetivo, presupuesto: camp.presupuesto_diario,
+      roas_objetivo: objetivoDe(itemId),
+      piso: pisoDe(itemId),
+      presupuesto: camp.presupuesto_diario,
       fase: lista.length ? lista[lista.length - 1].fase : 'optimizacion',
       palanca: 'ninguna', decision: ''
     };
@@ -3850,12 +3881,12 @@ function ControlesCampana({ camp, cfg, setCfg, pisoExigente }) {
     guardarLista(lista.filter(e => e.id !== id));
   };
 
-  // Qué dice el método con los números del último control registrado
   function indicacion(e, prev) {
     const r = e.m.roasReal, obj = Number(e.roas_objetivo) || null;
+    const piso = e.piso != null ? e.piso : pisoExigente;
     if (r == null) return null;
-    if (pisoExigente != null && r < pisoExigente) return ['rojo',
-      `ROAS ${r.toFixed(2)} debajo del piso ${pisoExigente.toFixed(2)}: la campaña pierde plata. ` +
+    if (piso != null && r < piso) return ['rojo',
+      `ROAS ${r.toFixed(2)} debajo del piso ${piso.toFixed(2)}: pierde plata. ` +
       'El método dice volver a Preparación: revisar margen, precio o publicación antes de seguir invirtiendo.'];
     if (prev && prev.palanca && prev.palanca !== 'ninguna') {
       const dias = Math.round((new Date(e.fecha) - new Date(prev.fecha)) / 86400000);
@@ -3888,32 +3919,55 @@ function ControlesCampana({ camp, cfg, setCfg, pisoExigente }) {
   ];
 
   const ordenada = lista.slice().reverse(); // más nuevo primero
+  const sujetoDeEntrada = (e) => e.sujeto || 'campania';
 
   return /*#__PURE__*/React.createElement("div", { className: "table-section" },
     /*#__PURE__*/React.createElement("div", { className: "table-section-header" },
-      /*#__PURE__*/React.createElement("h2", null, "Controles semanales"),
+      /*#__PURE__*/React.createElement("h2", null, "Controles semanales")),
+    /*#__PURE__*/React.createElement("div", { className: "sync-barra-controles control-registro" },
+      /*#__PURE__*/React.createElement("label", { className: "sync-barra-campo control-sujeto" },
+        /*#__PURE__*/React.createElement("span", null, "Qué registrar"),
+        /*#__PURE__*/React.createElement("select", {
+          value: sujeto,
+          onChange: e => setSujeto(e.target.value)
+        },
+          /*#__PURE__*/React.createElement("option", { value: "campania" }, "Campaña completa (suma de todas)"),
+          anuncios.map(a => /*#__PURE__*/React.createElement("option", {
+            key: a.item_id, value: a.item_id
+          }, a.titulo || a.item_id)))),
       /*#__PURE__*/React.createElement("button", {
         type: "button", className: "add-btn", onClick: registrar, disabled: !dAhora,
         title: dAhora ? '' : 'Sincronizá primero para tener métricas frescas'
-      }, /*#__PURE__*/React.createElement(Plus, { size: 16 }), "Registrar control con las métricas de hoy")),
+      }, /*#__PURE__*/React.createElement(Plus, { size: 16 }), "Registrar control")),
     /*#__PURE__*/React.createElement("p", { className: "tramo-nota" },
-      "Cada control congela las métricas del momento y deja escrita la decisión. La semana siguiente, " +
-      "sincronizá, registrá otro control y las flechas te muestran si lo que decidiste funcionó."),
+      "Cada control congela las métricas del momento y deja escrita la decisión. La optimización se " +
+      "trabaja publicación por publicación: elegí cuál registrar. Las flechas comparan siempre contra " +
+      "el control anterior DE LA MISMA publicación (o de la campaña completa)."),
     ordenada.length === 0 && /*#__PURE__*/React.createElement("div", { className: "sub-empty" },
       "Sin controles todavía. Sincronizá y registrá el primero: esa foto va a ser tu punto de partida."),
     ordenada.map((e, i) => {
-      const prev = ordenada[i + 1] || null; // el control anterior en el tiempo
-      const ind = i === 0 ? indicacion(e, prev) : null;
+      // El anterior COMPARABLE: mismo sujeto (misma publicación o campaña completa)
+      let prev = null;
+      for (let j = i + 1; j < ordenada.length; j++) {
+        if (sujetoDeEntrada(ordenada[j]) === sujetoDeEntrada(e)) { prev = ordenada[j]; break; }
+      }
+      const esUltimoDeSuSujeto = ordenada.findIndex(x => sujetoDeEntrada(x) === sujetoDeEntrada(e)) === i;
+      const ind = esUltimoDeSuSujeto ? indicacion(e, prev) : null;
+      const esCampania = sujetoDeEntrada(e) === 'campania';
       return /*#__PURE__*/React.createElement("div", { key: e.id, className: "control-card" },
         /*#__PURE__*/React.createElement("div", { className: "control-card-head" },
           /*#__PURE__*/React.createElement("b", null,
             new Date(e.fecha).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' })),
+          /*#__PURE__*/React.createElement("span", {
+            className: "chip control-chip-sujeto" + (esCampania ? " control-chip-campania" : "")
+          }, esCampania ? "Campaña completa" : (e.sujeto_titulo || e.sujeto)),
           e.ventana ? /*#__PURE__*/React.createElement("span", { className: "control-ventana" },
             "período " + e.ventana.desde + " al " + e.ventana.hasta) : null,
           /*#__PURE__*/React.createElement("span", { className: "control-config" },
             (e.roas_objetivo ? "ROAS obj " + e.roas_objetivo : "") +
+            (e.piso != null ? " · piso " + Number(e.piso).toFixed(2) : "") +
             (e.presupuesto != null ? " · presup. " + money(e.presupuesto) : "")),
-          i === 0 ? /*#__PURE__*/React.createElement("span", { className: "chip ok" }, "último") : null,
+          esUltimoDeSuSujeto ? /*#__PURE__*/React.createElement("span", { className: "chip ok" }, "último") : null,
           /*#__PURE__*/React.createElement("button", {
             type: "button", className: "icon-btn control-borrar",
             onClick: () => borrar(e.id), "aria-label": "Borrar control"
@@ -4076,9 +4130,6 @@ function AdsPanel({ productos, stockProductos, cfg, setCfg, seleccion }) {
 
   // ---- Vista de UNA campaña, con el mismo orden de métricas que Mercado Ads ----
   if (campSel) {
-    const pubsDeCampana = (campSel.anuncios || [])
-      .map(a => productos.find(p => p.mlItemId && p.mlItemId === a.item_id))
-      .filter(Boolean);
     return /*#__PURE__*/React.createElement("div", { className: "module-panel" },
       /*#__PURE__*/React.createElement("div", { className: "module-header" },
         /*#__PURE__*/React.createElement("h1", null, campSel.nombre),
@@ -4088,7 +4139,7 @@ function AdsPanel({ productos, stockProductos, cfg, setCfg, seleccion }) {
       /*#__PURE__*/React.createElement(CampanaCard, {
         c: campSel, productos: productos, detalle: true }),
       /*#__PURE__*/React.createElement(ControlesCampana, {
-        camp: campSel, cfg: cfg, setCfg: setCfg,
+        camp: campSel, cfg: cfg, setCfg: setCfg, productos: productos,
         pisoExigente: (function () {
           const ps = (campSel.anuncios || []).map(a => {
             const p = productos.find(x => x.mlItemId && x.mlItemId === a.item_id);
@@ -4097,18 +4148,8 @@ function AdsPanel({ productos, stockProductos, cfg, setCfg, seleccion }) {
           }).filter(Boolean);
           return ps.length ? Math.max(...ps) : null;
         })() }),
-      pubsDeCampana.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null,
-        /*#__PURE__*/React.createElement("div", { className: "table-section-header" },
-          /*#__PURE__*/React.createElement("h2", null, "Definí el objetivo de estas publicaciones")),
-        /*#__PURE__*/React.createElement("div", { className: "costo-cards-grid" },
-          pubsDeCampana.map(p => {
-            const sp = stockProductos.find(s => (s.nombre || '') === (p.nombre || ''));
-            const stock = sp ? calcularModeloStock(sp) : null;
-            return /*#__PURE__*/React.createElement(FichaAds, {
-              key: p.id, p: p, pub: pubs[p.id] || {},
-              guardar: (cbs) => guardarPub(p.id, cbs),
-              politica: politica, stock: stock });
-          }))));
+      /*#__PURE__*/React.createElement("p", { className: "tramo-nota" },
+        "El objetivo, el margen y el piso de cada publicación se definen una sola vez en \"Ver todos\"."));
   }
 
   return /*#__PURE__*/React.createElement("div", { className: "module-panel" },
@@ -5605,6 +5646,14 @@ function JopexPanel() {
         }
         .control-decision-txt { flex: 1; min-width: 240px; }
         .control-decision-txt textarea { width: 100%; box-sizing: border-box; }
+        .control-registro { margin-bottom: 8px; }
+        .control-sujeto { flex: 1; min-width: 240px; }
+        .control-sujeto select { width: 100%; }
+        .control-chip-sujeto {
+          max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+          background: rgba(61,155,255,0.12); color: var(--blue-glow);
+        }
+        .control-chip-campania { background: var(--panel-2); color: var(--text-secondary); }
 
         /* =====================================================================
            VERSIÓN CELULAR / TABLET
