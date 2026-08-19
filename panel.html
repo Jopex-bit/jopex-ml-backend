@@ -4956,7 +4956,9 @@ function JopexPanel() {
         .cotiz-grupo-nombre:focus { outline: none; border-bottom: 1px solid var(--lime); }
         .cotiz-grupo-body {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+          /* 480px de piso: la fila de productos (HS Code, tasa, US$...) necesita
+             lugar. Con 320px las cotizaciones vecinas se pisaban entre sí. */
+          grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
           gap: 14px;
         }
         .cotiz-row {
@@ -5390,6 +5392,7 @@ function JopexPanel() {
         .lineas-bloque {
           margin-top: 14px; padding: 12px 14px; border: 1px dashed var(--border-soft);
           border-radius: 10px; background: rgba(11,21,38,0.5);
+
         }
         .lineas-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
         .lineas-head h4 {
@@ -5398,12 +5401,15 @@ function JopexPanel() {
         }
         .lineas-hint { font-size: 11.5px; color: var(--text-secondary); margin: 6px 0 10px; line-height: 1.5; }
         .linea-row {
-          display: grid;
-          grid-template-columns: 22px minmax(140px,1.6fr) minmax(85px,1fr) 80px 80px 110px 120px auto;
-          gap: 10px; align-items: end; margin-bottom: 10px;
+          display: flex; flex-wrap: wrap;
+          gap: 10px; align-items: flex-end; margin-bottom: 12px;
+          padding-bottom: 10px; border-bottom: 1px dotted rgba(140,163,196,0.12);
         }
+        .linea-row:last-of-type { border-bottom: none; padding-bottom: 0; }
+        .linea-row .linea-desc { flex: 2 1 160px; min-width: 140px; }
+        .linea-row .cotiz-field:not(.linea-desc) { flex: 1 1 96px; min-width: 86px; }
+        .linea-row .cotiz-field input { width: 100%; min-width: 0; box-sizing: border-box; }
         @media (max-width: 900px) {
-          .linea-row { grid-template-columns: 22px 1fr 1fr; }
         }
         .linea-num {
           width: 22px; height: 22px; border-radius: 50%; background: var(--panel-2);
@@ -5758,7 +5764,6 @@ function JopexPanel() {
           .stock-detalle-header .stock-producto-title { min-width: 0; flex: 1; font-size: 17px; }
           .costo-card-title { font-size: 16px; }
           .cotiz-destino { min-width: 0; }
-          .linea-row { grid-template-columns: 22px 1fr 1fr; }
         }
 
         @media (max-width: 480px) {
