@@ -2,46 +2,31 @@ const express = require('express');
 const axios = require('axios');
 
 // ---------------------------------------------------------------------------
-// RADAR DE MERCADO — investigación de oportunidades
+// RADAR DE MERCADO v2 — investigación de oportunidades
 //
-//   GET /api/mercado?q=collar+gps+perro
+//   GET /api/mercado?q=fuente agua gatos
+//   GET /api/mercado/prueba          <- qué puertas de ML están abiertas hoy
+//   GET /api/mercado/tendencias?categoria=MLA1071
+//   GET /api/mercado/masvendidos?categoria=MLA1071
+//   GET /api/mercado/historial?q=fuente agua gatos
 //
-// Devuelve la radiografía de una búsqueda en Mercado Libre y, sobre esa base,
-// calcula CUÁNTO PODÉS PAGAR por el producto para que el negocio cierre.
+// Mercado Libre cerró la búsqueda pública (/sites/MLA/search devuelve 403).
+// Por eso el radar prueba TRES fuentes en cascada y usa la primera que abra:
 //
-// La lógica es al revés de la intuición: no parte del costo para calcular el
-// precio, parte del precio real de mercado para calcular el costo máximo.
+//   A) Búsqueda pública        -> si algún día la reabren
+//   B) Catálogo (la que sirve) -> /products/search + /products/{id}/items
+//      Devuelve TODOS los que compiten por cada producto, con precio,
+//      unidades vendidas, stock, vendedor y si están en Full.
+//   C) Más vendidos            -> /highlights, para explorar una categoría
 //
-// Parámetros:
-//   q             (obligatorio) qué buscar. Ej: q=collar gps perro
-//   paginas       cuántas páginas de 50 leer. Por defecto 3 (150 publicaciones).
-//   margen        margen neto objetivo en %. Por defecto 35.
-//   impuestos     % de impuestos/retenciones sobre la venta. Por defecto 0.
-//   envio         costo de envío que pagás vos, en pesos. Si no lo pasás, se
-//                 intenta medir con las dimensiones (ver abajo).
-//   dimensiones   para medir el envío contra tu cuenta. Ej: 20x15x10,500
-//                 (ancho x alto x largo en cm, coma, peso en gramos)
-//   multiplicador cuántas veces el precio FOB te sale el producto puesto acá
-//                 (flete + impuestos + despacho). Por defecto 2.
-//   precio        forzar el precio de referencia en vez de usar la mediana.
-//   guardar=0     no guardar la foto de hoy (por defecto sí la guarda).
-//
-// Rutas auxiliares:
-//   GET /api/mercado/tendencias?categoria=MLA1071   -> lo más buscado
-//   GET /api/mercado/masvendidos?categoria=MLA1071  -> los más vendidos
-//   GET /api/mercado/historial?q=collar+gps+perro   -> fotos guardadas y deltas
-//
-// IMPORTANTE SOBRE LOS DATOS:
-// Mercado Libre ofusca las cantidades en los recursos públicos: en vez de un
-// número devuelve rangos ("RANGO_51_100"). Por eso acá NUNCA se lee el campo
-// crudo: todo pasa por parseCantidad(), que devuelve mínimo, máximo y un
-// estimado. Y por eso el radar guarda una foto por vez: la diferencia entre
-// dos fotos es la única medición REAL de cuánto se vendió en el período.
+// La respuesta siempre dice qué fuente se usó y qué falló, en "fuente" y
+// "diagnostico".
 // ---------------------------------------------------------------------------
 
 const SITIO = 'MLA';
 
-// --- Cantidades ofuscadas -> {min, max, estimado} --------------------------
+// Las cantidades vienen ofuscadas por rangos ("RANGO_51_100"): nunca se lee
+// el campo crudo, todo pasa por acá.
 function parseCantidad(v) {
   if (v === null || v === undefined) return { min: null, max: null, estimado: null, exacto: false, crudo: null };
   if (typeof v === 'number' && isFinite(v)) return { min: v, max: v, estimado: v, exacto: true, crudo: v };
@@ -68,7 +53,6 @@ function pct(parte, total) {
   return Number(((parte / total) * 100).toFixed(1));
 }
 
-// Clave estable para guardar la foto de una búsqueda
 function claveBusqueda(q) {
   return 'jopex_radar_' + String(q).toLowerCase()
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
@@ -87,11 +71,56 @@ module.exports = (app) => {
   }
 
   // =========================================================================
+  // PRUEBA — qué endpoints de ML responden hoy con esta cuenta
+  // =========================================================================
+  router.get('/prueba', async (req, res) => {
+    const salida = {};
+    try {
+      const token = await app.locals.getAccessTokenValido();
+      const tokens = app.locals.leerTokens();
+      const API = app.locals.ML_API;
+      const auth = { headers: { Authorization: `Bearer ${token}` } };
+      const q = String(req.query.q || 'fuente agua gatos');
+      const cat = String(req.query.categoria || 'MLA1071');
+
+      const probar = async (nombre, url, params) => {
+        try {
+          const r = await axios.get(url, { ...auth, params, timeout: 20000 });
+          const d = r.data;
+          const cant = Array.isArray(d) ? d.length
+            : (d?.results?.length ?? d?.content?.length ?? null);
+          salida[nombre] = { ok: true, status: r.status, elementos: cant, muestra: JSON.stringify(d).slice(0, 300) };
+        } catch (e) {
+          salida[nombre] = {
+            ok: false,
+            status: e.response?.status || null,
+            detalle: e.response?.data?.message || e.response?.data?.error || e.message,
+          };
+        }
+      };
+
+      await probar('busqueda_publica', `${API}/sites/${SITIO}/search`, { q, limit: 5 });
+      await probar('catalogo_buscar', `${API}/products/search`, { site_id: SITIO, q, limit: 5 });
+      await probar('tendencias', `${API}/trends/${SITIO}/${cat}`, null);
+      await probar('mas_vendidos', `${API}/highlights/${SITIO}/category/${cat}`, null);
+      await probar('mis_publicaciones', `${API}/users/${tokens.user_id}/items/search`, { status: 'active', limit: 1 });
+
+      res.json({
+        probado_en: new Date().toISOString(),
+        consulta_usada: q,
+        categoria_usada: cat,
+        resultados: salida,
+        lectura: 'Lo que diga ok:true es lo que se puede usar hoy. Lo que dé 403 está cerrado por Mercado Libre.',
+      });
+    } catch (err) {
+      res.status(500).json({ error: 'Falló la prueba.', detalle: err.message, resultados: salida });
+    }
+  });
+
+  // =========================================================================
   // RADAR PRINCIPAL
   // =========================================================================
   router.get('/', async (req, res) => {
-    // Cada intento contra la API queda registrado acá: si algo no vino, se ve
-    // por qué, en vez de aparecer como un cero silencioso.
     const diagnostico = [];
     const anotar = (paso, e) => diagnostico.push({
       paso,
@@ -101,7 +130,7 @@ module.exports = (app) => {
 
     try {
       const q = String(req.query.q || '').trim();
-      if (!q) return res.status(400).json({ error: 'Indicá qué buscar. Ej: /api/mercado?q=collar gps perro' });
+      if (!q) return res.status(400).json({ error: 'Indicá qué buscar. Ej: /api/mercado?q=fuente agua gatos' });
 
       const token = await app.locals.getAccessTokenValido();
       const tokens = app.locals.leerTokens();
@@ -109,71 +138,142 @@ module.exports = (app) => {
       const auth = { headers: { Authorization: `Bearer ${token}` } };
       const uid = tokens.user_id;
 
-      const paginas = Math.min(Math.max(Number(req.query.paginas) || 3, 1), 10);
       const margenObjetivo = Math.min(Math.max(Number(req.query.margen) || 35, 1), 90);
       const impuestosPct = Math.min(Math.max(Number(req.query.impuestos) || 0, 0), 60);
       const multiplicador = Math.min(Math.max(Number(req.query.multiplicador) || 2, 1), 10);
+      const maxProductos = Math.min(Math.max(Number(req.query.productos) || 6, 1), 15);
 
-      // ---- 1) Traer las publicaciones que compiten ----
-      const crudos = [];
+      let pubs = [];
+      let fuente = null;
       let universo = null;
-      for (let p = 0; p < paginas; p++) {
-        const offset = p * 50;
-        if (offset >= 1000) break; // ML no pagina más allá de 1000 en modo normal
+      const productosCatalogo = [];
+
+      // ---- FUENTE A: búsqueda pública (hoy suele dar 403) ----
+      try {
+        const r = await axios.get(`${API}/sites/${SITIO}/search`, {
+          ...auth, params: { q, limit: 50 }, timeout: 20000,
+        });
+        const lote = r.data?.results || [];
+        if (lote.length) {
+          universo = r.data?.paging?.total ?? lote.length;
+          fuente = 'busqueda_publica';
+          pubs = lote.map((it) => ({
+            id: it.id,
+            titulo: it.title,
+            permalink: it.permalink,
+            precio: typeof it.price === 'number' ? it.price : null,
+            vendedor_id: it.seller?.id ?? null,
+            vendedor: it.seller?.nickname ?? null,
+            tienda_oficial: it.official_store_id ?? null,
+            categoria: it.category_id ?? null,
+            tipo_publicacion: it.listing_type_id === 'gold_pro' ? 'Premium' : 'Clásica',
+            full: it.shipping?.logistic_type === 'fulfillment',
+            envio_gratis: Boolean(it.shipping?.free_shipping),
+            catalogo: Boolean(it.catalog_listing),
+            producto_catalogo: it.catalog_product_id ?? null,
+            vendidos: parseCantidad(it.sold_quantity),
+            stock: parseCantidad(it.available_quantity),
+          }));
+        }
+      } catch (e) {
+        anotar('busqueda publica', e);
+      }
+
+      // ---- FUENTE B: catálogo (la que funciona) ----
+      if (!pubs.length) {
+        let encontrados = [];
         try {
-          const r = await axios.get(`${API}/sites/${SITIO}/search`, {
-            ...auth,
-            params: { q, limit: 50, offset },
-            timeout: 20000,
+          const r = await axios.get(`${API}/products/search`, {
+            ...auth, params: { site_id: SITIO, q, limit: maxProductos }, timeout: 20000,
           });
-          const lote = r.data?.results || [];
-          universo = r.data?.paging?.total ?? universo;
-          crudos.push(...lote);
-          if (lote.length < 50) break;
+          encontrados = r.data?.results || [];
+          universo = r.data?.paging?.total ?? encontrados.length;
         } catch (e) {
-          anotar('busqueda offset ' + offset, e);
-          break;
+          anotar('buscar en catalogo', e);
+        }
+
+        if (encontrados.length) {
+          fuente = 'catalogo';
+          await enTandas(encontrados.slice(0, maxProductos), 3, async (prod) => {
+            const pid = prod.id;
+            productosCatalogo.push({
+              producto_id: pid,
+              nombre: prod.name || null,
+              estado: prod.status || null,
+              competidores: null,
+              precio_min: null,
+              precio_max: null,
+              ganador: null,
+            });
+            const ficha = productosCatalogo[productosCatalogo.length - 1];
+
+            // Quién gana la ficha hoy
+            try {
+              const rp = await axios.get(`${API}/products/${pid}`, { ...auth, timeout: 15000 });
+              const w = rp.data?.buy_box_winner;
+              if (w) {
+                ficha.ganador = {
+                  item_id: w.item_id, vendedor_id: w.seller_id, precio: w.price,
+                  full: w.shipping?.logistic_type === 'fulfillment',
+                  vendidos: parseCantidad(w.sold_quantity).estimado,
+                };
+              }
+            } catch (e) {
+              anotar('ganador de catalogo ' + pid, e);
+            }
+
+            // Todos los que compiten por esa ficha
+            try {
+              const ri = await axios.get(`${API}/products/${pid}/items`, {
+                ...auth, params: { limit: 50 }, timeout: 20000,
+              });
+              const comp = ri.data?.results || [];
+              ficha.competidores = ri.data?.paging?.total ?? comp.length;
+              const precios = [];
+              comp.forEach((c) => {
+                if (typeof c.price === 'number') precios.push(c.price);
+                pubs.push({
+                  id: c.item_id,
+                  titulo: prod.name || null,
+                  permalink: null,
+                  precio: typeof c.price === 'number' ? c.price : null,
+                  vendedor_id: c.seller_id ?? null,
+                  vendedor: null,
+                  tienda_oficial: c.official_store_id ?? null,
+                  categoria: c.category_id ?? null,
+                  tipo_publicacion: c.listing_type_id === 'gold_pro' ? 'Premium' : 'Clásica',
+                  full: c.shipping?.logistic_type === 'fulfillment',
+                  envio_gratis: Boolean(c.shipping?.free_shipping),
+                  catalogo: true,
+                  producto_catalogo: pid,
+                  vendidos: parseCantidad(c.sold_quantity),
+                  stock: parseCantidad(c.available_quantity),
+                });
+              });
+              if (precios.length) {
+                ficha.precio_min = Math.min(...precios);
+                ficha.precio_max = Math.max(...precios);
+              }
+            } catch (e) {
+              anotar('competidores de ' + pid, e);
+            }
+          });
         }
       }
 
-      if (!crudos.length) {
+      if (!pubs.length) {
         return res.json({
-          consulta: q, generado_en: new Date().toISOString(),
-          error: 'La búsqueda no devolvió publicaciones.', diagnostico,
+          consulta: q, generado_en: new Date().toISOString(), fuente: null,
+          error: 'Ninguna fuente de datos respondió. Corré /api/mercado/prueba para ver qué está abierto.',
+          diagnostico,
         });
       }
 
-      // ---- 2) Normalizar cada publicación ----
-      const pubs = crudos.map((it) => {
-        const vend = parseCantidad(it.sold_quantity);
-        const stock = parseCantidad(it.available_quantity);
-        return {
-          id: it.id,
-          titulo: it.title,
-          permalink: it.permalink,
-          precio: typeof it.price === 'number' ? it.price : null,
-          precio_original: it.original_price ?? null,
-          vendedor_id: it.seller?.id ?? null,
-          vendedor: it.seller?.nickname ?? null,
-          tienda_oficial: it.official_store_id ?? null,
-          categoria: it.category_id ?? null,
-          tipo_publicacion: it.listing_type_id === 'gold_pro' ? 'Premium' : 'Clásica',
-          full: it.shipping?.logistic_type === 'fulfillment',
-          envio_gratis: Boolean(it.shipping?.free_shipping),
-          catalogo: Boolean(it.catalog_listing),
-          producto_catalogo: it.catalog_product_id ?? null,
-          cuotas_sin_interes: it.installments ? it.installments.rate === 0 : null,
-          vendidos: vend,
-          stock,
-        };
-      });
-
-      // ---- 3) Radiografía del mercado ----
+      // ---- Radiografía ----
       const precios = pubs.map((p) => p.precio).filter((n) => typeof n === 'number' && n > 0);
       const precioMediana = mediana(precios);
       const precioRef = Number(req.query.precio) > 0 ? Number(req.query.precio) : precioMediana;
 
-      // Reparto por vendedor: por cantidad de publicaciones Y por ventas estimadas
       const porVendedor = {};
       pubs.forEach((p) => {
         const k = p.vendedor_id || 'sin_dato';
@@ -181,7 +281,7 @@ module.exports = (app) => {
           porVendedor[k] = {
             vendedor_id: p.vendedor_id, vendedor: p.vendedor,
             publicaciones: 0, vendidos_estimado: 0, con_full: 0,
-            precio_min: null, precio_max: null, medalla: null, reputacion: null,
+            precio_min: null, precio_max: null, medalla: null, reputacion: null, ventas_totales: null,
           };
         }
         const v = porVendedor[k];
@@ -196,18 +296,18 @@ module.exports = (app) => {
       const vendedores = Object.values(porVendedor)
         .sort((a, b) => b.vendidos_estimado - a.vendidos_estimado || b.publicaciones - a.publicaciones);
 
-      const totalVendidosEstimado = vendedores.reduce((a, v) => a + v.vendidos_estimado, 0);
+      const totalVendidos = vendedores.reduce((a, v) => a + v.vendidos_estimado, 0);
       const lider = vendedores[0] || null;
       const top3 = vendedores.slice(0, 3).reduce((a, v) => a + v.vendidos_estimado, 0);
 
-      // ---- 4) Medallas del top 10 (la señal de saturación más fina) ----
-      // Mucho Platinum concentrado = mercado maduro, difícil de atacar.
+      // Medalla de los 10 principales: la señal más fina de saturación
       await enTandas(vendedores.slice(0, 10), 4, async (v) => {
         if (!v.vendedor_id) return;
         try {
           const r = await axios.get(`${API}/users/${v.vendedor_id}`, { ...auth, timeout: 10000 });
-          v.medalla = r.data?.seller_reputation?.power_seller_status ?? null; // silver | gold | platinum
-          v.reputacion = r.data?.seller_reputation?.level_id ?? null;         // ej "5_green"
+          v.medalla = r.data?.seller_reputation?.power_seller_status ?? null;
+          v.reputacion = r.data?.seller_reputation?.level_id ?? null;
+          v.ventas_totales = r.data?.seller_reputation?.transactions?.completed ?? null;
           if (!v.vendedor) v.vendedor = r.data?.nickname ?? null;
         } catch (e) {
           anotar('reputacion ' + v.vendedor_id, e);
@@ -216,17 +316,18 @@ module.exports = (app) => {
       const conMedalla = vendedores.slice(0, 10).filter((v) => v.medalla);
       const platinum = conMedalla.filter((v) => v.medalla === 'platinum').length;
 
-      // ---- 5) Categoría dominante (define la comisión) ----
       const conteoCat = {};
       pubs.forEach((p) => { if (p.categoria) conteoCat[p.categoria] = (conteoCat[p.categoria] || 0) + 1; });
       const categoriaDominante = Object.keys(conteoCat).sort((a, b) => conteoCat[b] - conteoCat[a])[0] || null;
 
       const radiografia = {
-        universo_publicaciones: universo,
+        fuente,
+        universo,
+        productos_de_catalogo: productosCatalogo.length || null,
         publicaciones_analizadas: pubs.length,
         vendedores_distintos: vendedores.length,
-        concentracion_lider_pct: lider ? pct(lider.vendidos_estimado, totalVendidosEstimado) : null,
-        concentracion_top3_pct: pct(top3, totalVendidosEstimado),
+        concentracion_lider_pct: lider ? pct(lider.vendidos_estimado, totalVendidos) : null,
+        concentracion_top3_pct: pct(top3, totalVendidos),
         publicaciones_del_lider_pct: lider ? pct(lider.publicaciones, pubs.length) : null,
         en_full_pct: pct(pubs.filter((p) => p.full).length, pubs.length),
         en_catalogo_pct: pct(pubs.filter((p) => p.catalogo).length, pubs.length),
@@ -237,15 +338,10 @@ module.exports = (app) => {
         precio_mediana: precioMediana,
         precio_max: precios.length ? Math.max(...precios) : null,
         categoria_dominante: categoriaDominante,
-        ventas_estimadas_acumuladas: totalVendidosEstimado || null,
-        nota_ventas: 'Las unidades vendidas son ACUMULADAS desde que se publicó cada aviso, y ' +
-          'Mercado Libre las devuelve por rangos. Sirven para comparar entre competidores, no ' +
-          'como venta mensual. La venta real del período sale de comparar dos fotos: ver /api/mercado/historial.',
+        ventas_estimadas_acumuladas: totalVendidos || null,
       };
 
-      // =====================================================================
-      // 6) EL CÁLCULO QUE DECIDE: cuánto podés pagar por este producto
-      // =====================================================================
+      // ---- El cálculo que decide: cuánto podés pagar ----
       const economia = {
         precio_referencia: precioRef,
         margen_objetivo_pct: margenObjetivo,
@@ -262,7 +358,6 @@ module.exports = (app) => {
       };
 
       if (precioRef && categoriaDominante) {
-        // Comisión real medida contra tu cuenta (incluye cargo fijo y financiación)
         try {
           const r = await axios.get(`${API}/sites/${SITIO}/listing_prices`, {
             ...auth,
@@ -280,18 +375,16 @@ module.exports = (app) => {
           anotar('comision', e);
         }
 
-        // Envío: el que pasaste, o medido con las dimensiones contra tu cuenta
-        if (Number(req.query.envio) >= 0 && req.query.envio !== undefined) {
+        if (req.query.envio !== undefined && Number(req.query.envio) >= 0) {
           economia.envio_vendedor = Number(req.query.envio);
         } else if (req.query.dimensiones) {
           try {
             const r = await axios.get(`${API}/users/${uid}/shipping_options/free`, {
               ...auth,
               params: {
-                dimensions: req.query.dimensiones,
-                item_price: precioRef,
-                listing_type_id: 'gold_pro',
-                mode: 'me2', condition: 'new', logistic_type: 'drop_off', verbose: true,
+                dimensions: req.query.dimensiones, item_price: precioRef,
+                listing_type_id: 'gold_pro', mode: 'me2', condition: 'new',
+                logistic_type: 'drop_off', verbose: true,
               },
             });
             economia.envio_vendedor = r.data?.coverage?.all_country?.list_cost ?? null;
@@ -307,48 +400,31 @@ module.exports = (app) => {
 
         const techo = precioRef - comision - envio - economia.impuestos - economia.ganancia_pretendida;
         economia.costo_maximo_landed = Number(techo.toFixed(2));
-        // 10% de colchón por el dólar y el flete, que se mueven.
         economia.costo_maximo_recomendado = Number((techo * 0.9).toFixed(2));
         economia.precio_fob_maximo = Number((techo * 0.9 / multiplicador).toFixed(2));
         economia.viable = techo > 0;
-        economia.como_se_lee =
-          'Puesto en tu casa en Resistencia, con flete e impuestos de importación incluidos, ' +
-          'este producto no te puede costar más de $' + economia.costo_maximo_recomendado + '. ' +
-          'Si el proveedor pide más, se descarta.';
-      } else {
-        anotar('economia', new Error('Faltó precio de referencia o categoría dominante.'));
+        economia.como_se_lee = economia.viable
+          ? 'Puesto en tu casa, con flete e impuestos de importación incluidos, no te puede costar más de $' +
+            economia.costo_maximo_recomendado + '.'
+          : 'Al precio de mercado no queda margen: descartado.';
+        if (!economia.envio_vendedor) {
+          economia.aviso_envio = 'No se calculó el envío. Pasá &envio=7000 o &dimensiones=20x15x10,500 para que el número cierre.';
+        }
       }
 
-      // =====================================================================
-      // 7) SEMÁFORO
-      // =====================================================================
+      // ---- Semáforo ----
       const motivos = [];
       let color = 'verde';
       const r = radiografia;
+      if (economia.viable === false) { color = 'rojo'; motivos.push('Al precio de mercado no queda margen.'); }
+      if (r.concentracion_lider_pct != null && r.concentracion_lider_pct >= 50) { color = 'rojo'; motivos.push('Un solo vendedor se lleva la mitad o más.'); }
+      if (r.platinum_en_top10_pct != null && r.platinum_en_top10_pct >= 70) { color = color === 'rojo' ? 'rojo' : 'amarillo'; motivos.push('El top está dominado por Platinum: mercado maduro.'); }
+      if (r.en_full_pct != null && r.en_full_pct >= 70) { color = color === 'rojo' ? 'rojo' : 'amarillo'; motivos.push('Casi todos en Full: sin Full arrancás en desventaja.'); }
+      if (fuente === 'catalogo') motivos.push('Datos de catálogo: acá se pelea por precio y reputación en una sola ficha.');
+      if (r.vendedores_distintos != null && r.vendedores_distintos < 5) { color = color === 'rojo' ? 'rojo' : 'amarillo'; motivos.push('Muy pocos vendedores: puede ser oportunidad o falta de demanda.'); }
+      if (color === 'verde') motivos.push('Competencia repartida y el precio de mercado deja margen.');
 
-      if (economia.viable === false) { color = 'rojo'; motivos.push('Al precio de mercado no queda margen: el costo máximo da negativo.'); }
-      if (r.concentracion_lider_pct != null && r.concentracion_lider_pct >= 50) { color = 'rojo'; motivos.push('Un solo vendedor se lleva la mitad o más del rubro.'); }
-      if (r.en_catalogo_pct != null && r.en_catalogo_pct >= 60) { color = 'rojo'; motivos.push('La mayoría se vende por catálogo: se pelea por precio en una sola ficha.'); }
-      if (r.platinum_en_top10_pct != null && r.platinum_en_top10_pct >= 70) { color = color === 'rojo' ? 'rojo' : 'amarillo'; motivos.push('El top está dominado por vendedores Platinum: mercado maduro.'); }
-      if (r.en_full_pct != null && r.en_full_pct >= 70) { color = color === 'rojo' ? 'rojo' : 'amarillo'; motivos.push('Casi todos están en Full: sin Full arrancás en desventaja.'); }
-      if (r.vendedores_distintos != null && r.vendedores_distintos < 5) { color = color === 'rojo' ? 'rojo' : 'amarillo'; motivos.push('Muy pocos vendedores: puede ser una oportunidad o un producto sin demanda. Verificar a mano.'); }
-      if (color === 'verde') motivos.push('Competencia repartida, sin barrera de Full ni de catálogo, y el precio de mercado deja margen.');
-
-      const semaforo = {
-        color,
-        motivos,
-        criterios_usados: {
-          margen_minimo_pct: margenObjetivo,
-          rojo_si_lider_supera_pct: 50,
-          rojo_si_catalogo_supera_pct: 60,
-          amarillo_si_platinum_top10_supera_pct: 70,
-          amarillo_si_full_supera_pct: 70,
-        },
-      };
-
-      // =====================================================================
-      // 8) Guardar la foto de hoy (para medir movimiento la próxima vez)
-      // =====================================================================
+      // ---- Foto para medir movimiento la próxima vez ----
       let historial = null;
       if (String(req.query.guardar || '1') !== '0' && app.locals.store) {
         try {
@@ -356,18 +432,13 @@ module.exports = (app) => {
           const previo = await app.locals.store.readKey(clave);
           const fotos = (previo && Array.isArray(previo.fotos)) ? previo.fotos : [];
           const foto = {
-            fecha: new Date().toISOString(),
-            universo,
-            precio_mediana: precioMediana,
-            vendedores_distintos: vendedores.length,
+            fecha: new Date().toISOString(), fuente, universo,
+            precio_mediana: precioMediana, vendedores_distintos: vendedores.length,
             en_full_pct: radiografia.en_full_pct,
-            items: pubs.slice(0, 80).map((p) => ({
-              id: p.id, v: p.vendedor_id, p: p.precio, e: p.vendidos.estimado,
-            })),
+            items: pubs.slice(0, 120).map((p) => ({ id: p.id, v: p.vendedor_id, p: p.precio, e: p.vendidos.estimado })),
           };
           const anterior = fotos.length ? fotos[fotos.length - 1] : null;
           fotos.push(foto);
-          // Guardamos hasta 26 fotos (medio año si la corrés semanal).
           await app.locals.store.saveKey(clave, { consulta: q, fotos: fotos.slice(-26) });
 
           if (anterior) {
@@ -394,17 +465,11 @@ module.exports = (app) => {
                 .map((k) => ({ vendedor_id: k, unidades: porVend[k], participacion_pct: pct(porVend[k], totalPeriodo) }))
                 .sort((a, b) => b.unidades - a.unidades).slice(0, 10),
               nota: totalPeriodo > 0
-                ? 'ESTA es la participación real de cada vendedor: medida, no estimada.'
-                : 'Entre las dos fotos no se detectó movimiento. Puede ser que haya pasado muy ' +
-                  'poco tiempo, o que Mercado Libre devuelva las cantidades por rangos demasiado ' +
-                  'anchos como para notar el cambio. Dejá pasar al menos una semana entre fotos.',
+                ? 'Participación REAL de cada vendedor: medida entre las dos fotos.'
+                : 'Sin movimiento entre fotos. Dejá pasar al menos una semana.',
             };
           } else {
-            historial = {
-              foto_anterior: null,
-              nota: 'Primera foto de esta búsqueda. Volvé a correrla en 7 días y acá vas a ver ' +
-                'cuántas unidades vendió cada uno en el período, que es el dato que vale.',
-            };
+            historial = { foto_anterior: null, nota: 'Primera foto. Repetí en 7 días para ver quién vendió cuánto.' };
           }
         } catch (e) {
           anotar('guardar foto', e);
@@ -414,20 +479,18 @@ module.exports = (app) => {
       res.json({
         consulta: q,
         generado_en: new Date().toISOString(),
-        semaforo,
+        fuente,
+        semaforo: { color, motivos },
         radiografia,
         economia,
         historial,
+        productos_catalogo: productosCatalogo,
         vendedores: vendedores.slice(0, 15),
-        publicaciones: pubs.slice(0, 30),
-        // Qué campos llegaron de verdad: sirve para saber en qué confiar.
         campos_disponibles: {
           vendidos_exactos: pubs.some((p) => p.vendidos.exacto),
           vendidos_por_rango: pubs.some((p) => !p.vendidos.exacto && p.vendidos.estimado != null),
           vendidos_ausentes: pubs.every((p) => p.vendidos.estimado == null),
           reputacion_de_terceros: conMedalla.length > 0,
-          logistic_type: pubs.some((p) => p.full),
-          catalogo: pubs.some((p) => p.catalogo),
         },
         diagnostico,
       });
@@ -442,7 +505,7 @@ module.exports = (app) => {
   });
 
   // =========================================================================
-  // TENDENCIAS — lo más buscado (la única fuente de DEMANDA que da ML)
+  // TENDENCIAS — lo más buscado (la demanda)
   // =========================================================================
   router.get('/tendencias', async (req, res) => {
     try {
@@ -457,21 +520,15 @@ module.exports = (app) => {
         categoria: req.query.categoria || 'todas',
         generado_en: new Date().toISOString(),
         cantidad: lista.length,
-        // Orden documentado por ML: las primeras son las que MÁS CRECEN.
         mas_crecen: lista.slice(0, 10),
         mas_deseadas: lista.slice(10, 30),
         mas_populares: lista.slice(30, 50),
-        nota: 'Las 10 primeras comparan las últimas dos semanas: ahí están las tendencias que ' +
-          'recién arrancan, que es donde conviene entrar. Se actualiza una vez por semana.',
       });
     } catch (err) {
       res.status(500).json({
         error: 'No se pudieron leer las tendencias.',
         status: err.response?.status || null,
         detalle: err.response?.data || err.message,
-        ayuda: err.response?.status === 403
-          ? 'Un 403 acá significa que tu aplicación no tiene permiso para Tendencias. Se habilita en el DevCenter de ML.'
-          : null,
       });
     }
   });
@@ -488,49 +545,60 @@ module.exports = (app) => {
       const API = app.locals.ML_API;
       const auth = { headers: { Authorization: `Bearer ${token}` } };
 
-      const r = await axios.get(`${API}/highlights/${SITIO}/category/${cat}`, { ...auth, timeout: 15000 });
+      const r = await axios.get(`${API}/highlights/${SITIO}/category/${cat}`, { ...auth, timeout: 20000 });
       const contenido = r.data?.content || [];
 
-      // Cada puesto puede ser una publicación o un producto de catálogo.
-      const items = contenido.filter((c) => c.type === 'ITEM').map((c) => c.id);
+      const ids = contenido.filter((c) => c.type === 'ITEM').map((c) => c.id);
       const detalles = {};
-      for (let i = 0; i < items.length; i += 20) {
+      for (let i = 0; i < ids.length; i += 20) {
         try {
-          const d = await axios.get(`${API}/items`, { ...auth, params: { ids: items.slice(i, i + 20).join(',') } });
+          const d = await axios.get(`${API}/items`, { ...auth, params: { ids: ids.slice(i, i + 20).join(',') } });
           d.data.forEach((x) => { if (x.code === 200 && x.body) detalles[x.body.id] = x.body; });
         } catch (e) { /* seguimos con lo que haya */ }
       }
+      // Los puestos de tipo PRODUCT son fichas de catálogo: traemos su ganador.
+      const productos = contenido.filter((c) => c.type === 'PRODUCT').map((c) => c.id);
+      const fichas = {};
+      await enTandas(productos, 3, async (pid) => {
+        try {
+          const rp = await axios.get(`${API}/products/${pid}`, { ...auth, timeout: 15000 });
+          fichas[pid] = rp.data;
+        } catch (e) { /* seguimos */ }
+      });
 
       res.json({
         categoria: cat,
         generado_en: new Date().toISOString(),
         ranking: contenido.map((c) => {
           const b = detalles[c.id];
+          const f = fichas[c.id];
+          const w = f?.buy_box_winner;
           return {
             posicion: c.position,
             tipo: c.type,
             id: c.id,
-            titulo: b?.title || null,
-            precio: b?.price ?? null,
-            vendedor_id: b?.seller_id ?? null,
-            full: b?.shipping?.logistic_type === 'fulfillment',
-            catalogo: Boolean(b?.catalog_listing),
-            permalink: b?.permalink || null,
+            titulo: b?.title || f?.name || null,
+            precio: b?.price ?? w?.price ?? null,
+            vendedor_id: b?.seller_id ?? w?.seller_id ?? null,
+            vendidos: parseCantidad(b?.sold_quantity ?? w?.sold_quantity).estimado,
+            full: (b?.shipping?.logistic_type || w?.shipping?.logistic_type) === 'fulfillment',
+            catalogo: c.type === 'PRODUCT' || Boolean(b?.catalog_listing),
+            permalink: b?.permalink || f?.permalink || null,
           };
         }),
-        nota: 'Máximo 20 puestos. Si un producto no aparece, no tiene volumen suficiente para el ranking.',
       });
     } catch (err) {
       res.status(500).json({
         error: 'No se pudieron leer los más vendidos.',
         status: err.response?.status || null,
         detalle: err.response?.data || err.message,
+        ayuda: 'Probá con una categoría más específica (hoja). Ej: MLA1072 en vez de MLA1071.',
       });
     }
   });
 
   // =========================================================================
-  // HISTORIAL — las fotos guardadas de una búsqueda
+  // HISTORIAL
   // =========================================================================
   router.get('/historial', async (req, res) => {
     try {
@@ -542,9 +610,9 @@ module.exports = (app) => {
         consulta: q,
         cantidad_fotos: guardado.fotos.length,
         fotos: guardado.fotos.map((f) => ({
-          fecha: f.fecha, universo: f.universo, precio_mediana: f.precio_mediana,
-          vendedores_distintos: f.vendedores_distintos, en_full_pct: f.en_full_pct,
-          publicaciones_guardadas: (f.items || []).length,
+          fecha: f.fecha, fuente: f.fuente, universo: f.universo,
+          precio_mediana: f.precio_mediana, vendedores_distintos: f.vendedores_distintos,
+          en_full_pct: f.en_full_pct, publicaciones_guardadas: (f.items || []).length,
         })),
       });
     } catch (err) {
