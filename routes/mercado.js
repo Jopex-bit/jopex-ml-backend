@@ -184,7 +184,10 @@ module.exports = (app) => {
         let encontrados = [];
         try {
           const r = await axios.get(`${API}/products/search`, {
-            ...auth, params: { site_id: SITIO, q, limit: maxProductos }, timeout: 20000,
+            ...auth,
+            // Pedimos de más para poder filtrar los que no tienen que ver.
+            params: { site_id: SITIO, q, status: 'active', limit: 20 },
+            timeout: 20000,
           });
           encontrados = r.data?.results || [];
           universo = r.data?.paging?.total ?? encontrados.length;
@@ -192,9 +195,26 @@ module.exports = (app) => {
           anotar('buscar en catalogo', e);
         }
 
-        if (encontrados.length) {
+        // El buscador de catálogo trae de todo: nos quedamos con las fichas
+        // cuyo nombre comparte al menos la mitad de las palabras de la búsqueda.
+        const palabras = q.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+          .split(/\s+/).filter((w) => w.length > 2);
+        const relevancia = (nombre) => {
+          const n = String(nombre || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+          const hits = palabras.filter((w) => n.includes(w)).length;
+          return palabras.length ? hits / palabras.length : 1;
+        };
+        const filtrados = encontrados
+          .map((p) => ({ ...p, _rel: relevancia(p.name) }))
+          .filter((p) => p._rel >= 0.5)
+          .sort((a, b) => b._rel - a._rel);
+        const aUsar = (filtrados.length ? filtrados : encontrados).slice(0, maxProductos);
+        const descartados = encontrados.length - aUsar.length;
+        if (descartados > 0) diagnostico.push({ paso: 'filtro de relevancia', detalle: descartados + ' fichas de catálogo descartadas por no coincidir con la búsqueda.' });
+
+        if (aUsar.length) {
           fuente = 'catalogo';
-          await enTandas(encontrados.slice(0, maxProductos), 3, async (prod) => {
+          await enTandas(aUsar, 3, async (prod) => {
             const pid = prod.id;
             productosCatalogo.push({
               producto_id: pid,
@@ -207,16 +227,36 @@ module.exports = (app) => {
             });
             const ficha = productosCatalogo[productosCatalogo.length - 1];
 
-            // Quién gana la ficha hoy
+            // Quién gana la ficha hoy. El ganador ya es un competidor válido:
+            // lo sumamos siempre, aunque después falle el listado completo.
             try {
               const rp = await axios.get(`${API}/products/${pid}`, { ...auth, timeout: 15000 });
               const w = rp.data?.buy_box_winner;
+              ficha.nombre = ficha.nombre || rp.data?.name || null;
               if (w) {
                 ficha.ganador = {
                   item_id: w.item_id, vendedor_id: w.seller_id, precio: w.price,
                   full: w.shipping?.logistic_type === 'fulfillment',
                   vendidos: parseCantidad(w.sold_quantity).estimado,
                 };
+                pubs.push({
+                  id: w.item_id,
+                  titulo: ficha.nombre,
+                  permalink: rp.data?.permalink || null,
+                  precio: typeof w.price === 'number' ? w.price : null,
+                  vendedor_id: w.seller_id ?? null,
+                  vendedor: null,
+                  tienda_oficial: w.official_store_id ?? null,
+                  categoria: w.category_id ?? null,
+                  tipo_publicacion: w.listing_type_id === 'gold_pro' ? 'Premium' : 'Clásica',
+                  full: w.shipping?.logistic_type === 'fulfillment',
+                  envio_gratis: Boolean(w.shipping?.free_shipping),
+                  catalogo: true,
+                  producto_catalogo: pid,
+                  ganador_ficha: true,
+                  vendidos: parseCantidad(w.sold_quantity),
+                  stock: parseCantidad(w.available_quantity),
+                });
               }
             } catch (e) {
               anotar('ganador de catalogo ' + pid, e);
@@ -260,6 +300,19 @@ module.exports = (app) => {
           });
         }
       }
+
+      // El ganador de la ficha también aparece en el listado de competidores:
+      // sacamos los repetidos por id de publicación.
+      const vistos = {};
+      pubs = pubs.filter((p) => {
+        if (!p.id) return true;
+        if (vistos[p.id]) {
+          if (p.ganador_ficha) vistos[p.id].ganador_ficha = true;
+          return false;
+        }
+        vistos[p.id] = p;
+        return true;
+      });
 
       if (!pubs.length) {
         return res.json({
