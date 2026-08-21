@@ -195,6 +195,8 @@ app.use('/api/costos', requireApiKey, require('./routes/costos')(app));
 app.use('/api/curva', requireApiKey, require('./routes/curva')(app));
 app.use('/api/ventas', requireApiKey, require('./routes/ventas')(app));
 app.use('/api/estado', requireApiKey, require('./routes/estado')(app));
+// Radar de mercado: investigación de oportunidades de producto.
+app.use('/api/mercado', requireApiKey, require('./routes/mercado')(app));
 
 // ---------------------------------------------------------------------------
 // Panel web: login + servir el HTML
