@@ -926,10 +926,11 @@ function CampoInput({
 function CampoCalculado({
   label,
   value,
-  highlight
+  highlight,
+  danger
 }) {
   return /*#__PURE__*/React.createElement("div", {
-    className: `calc-out ${highlight ? 'calc-out-highlight' : ''}`
+    className: `calc-out ${highlight ? 'calc-out-highlight' : ''} ${danger ? 'calc-out-danger' : ''}`
   }, /*#__PURE__*/React.createElement("span", {
     className: "calc-out-label"
   }, label), /*#__PURE__*/React.createElement("span", {
@@ -1412,7 +1413,8 @@ function cotizacionVacia() {
     defTcCourier: '',
     defOtrosArs: '',
     defUnidades: '',
-    destinoMl: ''
+    destinoMl: '',
+    estado: 'pendiente'
   };
 }
 const moneyUsd = n => n === '' || n == null || isNaN(n) ? '—' : `US$${Number(n).toLocaleString('es-AR', {
@@ -1500,10 +1502,25 @@ function calcularCotizacion(c) {
   // Lo que efectivamente le transferís al proveedor / plataforma, en dólares.
   const pagoProveedorUsd = valorTotal + envio + comision;
 
+  // Incidencia del flete sobre el costo total: si el envío pesa demasiado en el
+  // landed, conviene negociar EXW/otro Incoterm o consolidar con otro pedido.
+  const incidenciaFlete = totalUsd > 0 ? envio / totalUsd : 0;
+  const alertaFlete = incidenciaFlete > 0.30;
+
+  // Sensibilidad rápida (misma lógica que la plantilla Taller):
+  // - Corrida cambiaria: el costo en USD no se mueve, solo cambia la conversión a ARS.
+  // - Flete +30%: se suma el 30% del flete ORIGINAL directo al total (no se recalcula
+  //   toda la cascada de Seguro/Derecho/Tasa/IVA con el flete nuevo).
+  const sensCorridaArs = precioUnitUsd * (tc * 1.2);
+  const sensFlete30TotalUsd = totalUsd + envio * 0.30;
+  const sensFlete30UnitUsd = sensFlete30TotalUsd / unidades;
+  const sensFlete30UnitArs = sensFlete30UnitUsd * tc;
+
   return {
     seguro, derecho, estadistica, iva, totalUsd, precioUnitUsd, precioLandedArs,
     cifTotal, detalle, unidades, valorTotal, envio, comision, pagoProveedorUsd,
-    cantidadesDesparejas
+    cantidadesDesparejas, incidenciaFlete, alertaFlete,
+    sensCorridaArs, sensFlete30UnitUsd, sensFlete30UnitArs
   };
 }
 
@@ -1534,14 +1551,37 @@ function CotizacionRow({
   c,
   onUpdate,
   onRemove,
-  onEnviarCostos,
-  enviado,
-  publicaciones
+  publicaciones,
+  expandido,
+  onToggle,
+  estado,
+  onSetEstado
 }) {
   const h = React.createElement;
   const r = calcularCotizacion(c);
   const def = calcularDefinitivo(c, r);
   const destino = c.destinoMl || '';
+  const estadoLabel = estado === 'elegido' ? 'Elegido' : estado === 'descartado' ? 'Descartado' : 'Pendiente';
+  const estadoClase = estado === 'elegido' ? 'estado-elegido' : estado === 'descartado' ? 'estado-descartado' : 'estado-pendiente';
+
+  // Encabezado siempre visible: clic para expandir/colapsar (acordeón). El resto
+  // de las cotizaciones del mismo producto queda colapsado como historial.
+  const header = h('div', { className: 'cotiz-row-top cotiz-row-top-clickable', onClick: onToggle },
+    h('button', { type: 'button', className: 'cotiz-toggle', 'aria-label': expandido ? 'Colapsar' : 'Expandir' },
+      expandido ? '▾' : '▸'),
+    h('span', { className: 'cotiz-proveedor-nombre' }, c.proveedor || 'Proveedor sin nombre'),
+    h('span', { className: `estado-badge ${estadoClase}` }, estadoLabel),
+    r && h('span', { className: 'cotiz-unitario-preview' },
+      def ? money(def.unitario) + ' def.' : money(r.precioLandedArs) + ' est.'),
+    h('button', {
+      type: 'button', className: 'icon-btn',
+      onClick: e => { e.stopPropagation(); onRemove(c.id); },
+      'aria-label': 'Eliminar cotización'
+    }, h(Trash2, { size: 14 })));
+
+  if (!expandido) {
+    return h('div', { className: 'cotiz-row cotiz-row-colapsada' }, header);
+  }
 
   const lineas = Array.isArray(c.lineas) && c.lineas.length ? c.lineas : [{
     id: 'l0', desc: '', hsCode: c.hsCode || '', tasaDie: c.tasaDie,
@@ -1601,17 +1641,15 @@ function CotizacionRow({
       })));
 
   return h('div', { className: 'cotiz-row' },
-    // ---------- Encabezado ----------
-    h('div', { className: 'cotiz-row-top' },
-      h('input', {
-        type: 'text', className: 'cotiz-proveedor-input', value: c.proveedor,
-        onChange: e => onUpdate(c.id, 'proveedor', e.target.value),
-        placeholder: 'Nombre del proveedor'
-      }),
-      h('button', {
-        type: 'button', className: 'icon-btn', onClick: () => onRemove(c.id),
-        'aria-label': 'Eliminar cotización'
-      }, h(Trash2, { size: 14 }))),
+    header,
+    h('label', { className: 'cotiz-field' },
+      h('span', { className: 'calc-field-label' }, 'Nombre del proveedor'),
+      h('div', { className: 'calc-field-input' },
+        h('input', {
+          type: 'text', value: c.proveedor,
+          onChange: e => onUpdate(c.id, 'proveedor', e.target.value),
+          placeholder: 'Nombre del proveedor'
+        }))),
 
     // ---------- Datos generales ----------
     h('div', { className: 'cotiz-fields-grid' },
@@ -1715,14 +1753,29 @@ function CotizacionRow({
 
       h('div', { className: 'costo-out-grid' },
         h(CampoCalculado, { label: 'Seguro (1%)', value: moneyUsd(r.seguro) }),
+        h(CampoCalculado, { label: 'Base CIF', value: moneyUsd(r.cifTotal) }),
         h(CampoCalculado, { label: 'Derechos', value: moneyUsd(r.derecho) }),
         h(CampoCalculado, { label: 'Tasa Estadística', value: moneyUsd(r.estadistica) }),
         h(CampoCalculado, { label: 'IVA', value: moneyUsd(r.iva) }),
         h(CampoCalculado, { label: 'Total USD', value: moneyUsd(r.totalUsd), highlight: true }),
         h(CampoCalculado, { label: 'Unitario USD', value: moneyUsd(r.precioUnitUsd), highlight: true }),
+        h(CampoCalculado, {
+          label: 'Incidencia del flete',
+          value: (r.incidenciaFlete * 100).toFixed(1) + '%',
+          danger: r.alertaFlete
+        }),
         h(CampoCalculado, { label: 'Unidades armadas', value: String(r.unidades) })),
       h('div', { className: 'precio-hero cotiz-precio-landed' },
         money(r.precioLandedArs), ' ', h('span', null, '/ unidad landed ESTIMADO')),
+      r.alertaFlete && h('p', { className: 'lineas-hint', style: { color: 'var(--red-glow)' } },
+        'El flete representa más del 30% del costo total — conviene renegociar el envío o consolidar con otro pedido.'),
+
+      h('div', { className: 'sensibilidad-bloque' },
+        h('h4', null, 'Sensibilidad rápida'),
+        h('div', { className: 'costo-out-grid' },
+          h(CampoCalculado, { label: 'Base', value: money(r.precioLandedArs) }),
+          h(CampoCalculado, { label: 'Corrida cambiaria +20%', value: money(r.sensCorridaArs) }),
+          h(CampoCalculado, { label: 'Flete +30%', value: money(r.sensFlete30UnitArs) }))),
 
       // ---------- Costo definitivo ----------
       h('div', { className: 'definitivo' },
@@ -1773,12 +1826,16 @@ function CotizacionRow({
               p.titulo.length > 60 ? p.titulo.slice(0, 60) + '…' : p.titulo)))),
         h('button', {
           type: 'button', className: 'add-btn cotiz-enviar-btn',
-          onClick: () => onEnviarCostos(c, r, destino, def)
-        }, enviado ? '✓ Enviado a Costos' : 'Enviar a Costos')),
+          onClick: () => onSetEstado(c, estado === 'elegido' ? 'pendiente' : 'elegido', r, def, destino)
+        }, estado === 'elegido' ? '✓ Elegido — pasó a Costos' : 'Marcar como elegido')),
       h('p', { className: 'lineas-hint' },
-        def
-          ? 'Se enviará el costo DEFINITIVO: ' + money(def.unitario) + ' por unidad.'
-          : 'Se enviará el costo estimado: ' + money(r.precioLandedArs) + ' por unidad.')));
+        estado === 'elegido'
+          ? (def
+              ? 'Se mandó el costo DEFINITIVO: ' + money(def.unitario) + ' por unidad. Las demás cotizaciones de este producto quedan descartadas.'
+              : 'Se mandó el costo estimado: ' + money(r.precioLandedArs) + ' por unidad. Las demás cotizaciones de este producto quedan descartadas.')
+          : (def
+              ? 'Al marcarla como elegida se manda el costo DEFINITIVO: ' + money(def.unitario) + ' por unidad.'
+              : 'Al marcarla como elegida se manda el costo estimado: ' + money(r.precioLandedArs) + ' por unidad.'))));
 }
 
 // ============================================================================
@@ -2067,7 +2124,11 @@ function InvestigacionPanel({
   seleccion,
   setSeleccion
 }) {
-  const [enviados, setEnviados] = useState({});
+  // Acordeón: qué cotización está expandida dentro de cada grupo de producto.
+  const [expandidoPorGrupo, setExpandidoPorGrupo] = useState({});
+  // Cotizaciones cargadas antes de que existiera el campo 'estado': si ya tenían
+  // un destino de ML asignado, las tratamos como 'elegido'; si no, 'pendiente'.
+  const estadoDe = c => c.estado || (c.destinoMl ? 'elegido' : 'pendiente');
   // NUEVO: TC único para convertir la comparación a pesos (no pisa el TC de cada cotización)
   const [tcComparar, setTcComparar] = useState(() => {
     try { return window.localStorage.getItem('jopex_tc_comparar') || ''; } catch (e) { return ''; }
@@ -2163,7 +2224,6 @@ function InvestigacionPanel({
           mgUtilidad: '', promoPct: '', promoFechaFin: ''
         }];
       });
-      setEnviados(prev => ({ ...prev, [c.id]: true }));
       return;
     }
 
@@ -2188,9 +2248,22 @@ function InvestigacionPanel({
         promoFechaFin: ''
       }];
     });
-    setEnviados(prev => ({
-      ...prev,
-      [c.id]: true
+  };
+
+  // Marca una cotización como 'elegido' (manda su costo a Costos y descarta las
+  // demás del mismo producto) o la vuelve a 'pendiente'.
+  const marcarEstado = (c, nuevoEstado, r, def, destinoMl) => {
+    if (nuevoEstado === 'elegido' && r) {
+      enviarACostos(c, r, destinoMl, def);
+    }
+    const grupoDe = x => (x.producto || '').trim().toLowerCase();
+    const key = grupoDe(c);
+    setCotizaciones(prev => prev.map(cc => {
+      if (cc.id === c.id) return { ...cc, estado: nuevoEstado };
+      if (nuevoEstado === 'elegido' && grupoDe(cc) === key && estadoDe(cc) !== 'descartado') {
+        return { ...cc, estado: 'descartado' };
+      }
+      return cc;
     }));
   };
 
@@ -2245,7 +2318,14 @@ function InvestigacionPanel({
   }, /*#__PURE__*/React.createElement(Plus, {
     size: 16
   }), "Nueva cotización"))),
-  pubsMsg && /*#__PURE__*/React.createElement("div", { className: "sync-linea", style: { marginBottom: 10 } }, pubsMsg), gruposVisibles.map((g, gi) => /*#__PURE__*/React.createElement("div", {
+  pubsMsg && /*#__PURE__*/React.createElement("div", { className: "sync-linea", style: { marginBottom: 10 } }, pubsMsg), gruposVisibles.map((g, gi) => {
+    // Acordeón: por defecto se muestra expandida la cotización 'elegida' del
+    // producto; si ninguna está elegida todavía, la última cargada.
+    const gKey = keyGrupo(g);
+    const elegidoItem = g.items.find(x => estadoDe(x) === 'elegido');
+    const defaultExpandedId = elegidoItem ? elegidoItem.id : g.items[g.items.length - 1].id;
+    const expandedId = expandidoPorGrupo[gKey] !== undefined ? expandidoPorGrupo[gKey] : defaultExpandedId;
+    return /*#__PURE__*/React.createElement("div", {
     className: "cotiz-grupo",
     key: gi
   }, /*#__PURE__*/React.createElement("div", {
@@ -2278,9 +2358,11 @@ function InvestigacionPanel({
     c: c,
     onUpdate: updateField,
     onRemove: removeCotizacion,
-    onEnviarCostos: enviarACostos,
-    enviado: !!enviados[c.id],
-    publicaciones: publicaciones
+    publicaciones: publicaciones,
+    expandido: expandedId === c.id,
+    onToggle: () => setExpandidoPorGrupo(prev => ({ ...prev, [gKey]: expandedId === c.id ? null : c.id })),
+    estado: estadoDe(c),
+    onSetEstado: marcarEstado
   }))), /*#__PURE__*/React.createElement(ComparadorProveedores, {
     items: g.items,
     tc: tcComparar,
@@ -2289,7 +2371,7 @@ function InvestigacionPanel({
     data: competencia[keyGrupo(g)] || {},
     onChange: nd => setCompetencia(prev => ({ ...prev, [keyGrupo(g)]: nd })),
     mejorLandedArs: mejorLandedDe(g.items)
-  }))));
+  })); }));
 }
 
 // ---------- Stock: modelo Min-Max con cobertura, multi-producto ----------
@@ -4844,6 +4926,7 @@ function JopexPanel() {
           color: var(--text-primary);
         }
         .calc-out-highlight .calc-out-value { color: var(--lime); }
+        .calc-out-danger .calc-out-value { color: var(--red-glow); }
         @media (max-width: 900px) {
           .costo-card-body { grid-template-columns: 1fr; }
           .costo-block-output { border-left: none; padding-left: 0; border-top: 1px dashed var(--border-soft); padding-top: 12px; }
@@ -4955,11 +5038,11 @@ function JopexPanel() {
         }
         .cotiz-grupo-nombre:focus { outline: none; border-bottom: 1px solid var(--lime); }
         .cotiz-grupo-body {
-          display: grid;
-          /* 480px de piso: la fila de productos (HS Code, tasa, US$...) necesita
-             lugar. Con 320px las cotizaciones vecinas se pisaban entre sí. */
-          grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
-          gap: 14px;
+          /* Acordeón: una cotización expandida a la vez, el resto como historial
+             colapsado — por eso es una lista vertical y no una grilla de columnas. */
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
         }
         .cotiz-row {
           background: rgba(255, 255, 255, 0.02);
@@ -4974,6 +5057,28 @@ function JopexPanel() {
           gap: 8px;
           margin-bottom: 10px;
         }
+        .cotiz-row-colapsada { padding: 9px 14px; }
+        .cotiz-row-top-clickable { cursor: pointer; margin-bottom: 0; }
+        .cotiz-row-colapsada:hover { border-color: var(--border-strong, var(--border-soft)); }
+        .cotiz-toggle {
+          background: none; border: none; color: var(--text-secondary);
+          font-size: 11px; padding: 0 2px; cursor: pointer; line-height: 1;
+        }
+        .cotiz-proveedor-nombre {
+          font-weight: 600; font-size: 13.5px; color: var(--text-primary);
+          flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .cotiz-unitario-preview {
+          font-size: 12.5px; color: var(--text-secondary); white-space: nowrap;
+        }
+        .estado-badge {
+          font-size: 9.5px; font-weight: 700; letter-spacing: .4px;
+          padding: 2px 8px; border-radius: 999px; text-transform: uppercase;
+          white-space: nowrap;
+        }
+        .estado-pendiente { background: rgba(255,255,255,0.08); color: var(--text-secondary); }
+        .estado-elegido { background: rgba(61,220,60,0.15); color: var(--lime); }
+        .estado-descartado { background: rgba(255,77,94,0.12); color: var(--red-glow); }
         .cotiz-proveedor-input {
           background: transparent;
           border: none;
@@ -5435,6 +5540,15 @@ function JopexPanel() {
         .definitivo-hero { color: var(--lime) !important; }
         .definitivo-desvio { font-size: 12px; color: var(--text-secondary); margin: 8px 0 0; }
         .definitivo-usd { font-size: 12.5px; color: var(--lime); margin: 6px 0 0; opacity: .85; }
+        .sensibilidad-bloque {
+          margin-top: 14px; padding: 12px 16px; border-radius: 12px;
+          background: rgba(255,255,255,0.03);
+          border: 1px dashed var(--border-soft);
+        }
+        .sensibilidad-bloque h4 {
+          font-family: 'Rajdhani', sans-serif; font-size: 14px; font-weight: 700;
+          margin: 0 0 8px; color: var(--text-secondary); letter-spacing: .3px;
+        }
         .respaldo {
           margin-top: auto; padding: 14px 12px 16px;
           border-top: 1px solid var(--border-soft);
