@@ -1651,31 +1651,39 @@ function CotizacionRow({
           placeholder: 'Nombre del proveedor'
         }))),
 
-    // ---------- Datos generales ----------
-    h('div', { className: 'cotiz-fields-grid' },
-      campo('Link ML (competencia)', 'linkML'),
-      campo('Link Alibaba', 'linkAlibaba'),
-      campo('Envío total', 'envioUsd', 'US$', 'number'),
-      campo('Comisión Alibaba', 'comisionAlibabaUsd', 'US$', 'number'),
-      campo('TC del día', 'tc', '$', 'number'),
-      h('label', { className: 'cotiz-field' },
-        h('span', { className: 'calc-field-label' }, 'Fecha TC'),
-        h('div', { className: 'calc-field-input' },
-          h('input', {
-            type: 'date', value: c.tcFecha || '',
-            onChange: e => onUpdate(c.id, 'tcFecha', e.target.value)
-          })))),
-
-    // ---------- Líneas de producto ----------
+    // ---------- Cantidad y cotización (lo primero que se carga con el proveedor) ----------
     h('div', { className: 'lineas-bloque' },
       h('div', { className: 'lineas-head' },
         h('h4', null, 'Productos de la cotización'),
         h('button', { type: 'button', className: 'add-btn ghost-btn', onClick: addLinea },
           h(Plus, { size: 14 }), 'Agregar producto')),
       h('p', { className: 'lineas-hint' },
-        'Si tu publicación se arma con dos productos distintos (relación 1 a 1), cargá cada uno con su HS Code y su alícuota. Completá el valor POR UNIDAD o el TOTAL del renglón: el otro se calcula solo. El envío y el seguro se reparten según el valor de cada línea.'),
+        'Cargá Cantidad y el total del proveedor (o el precio por unidad: el otro se calcula solo). Si tu publicación se arma con dos productos distintos (relación 1 a 1), agregá otro renglón con su propio HS Code y alícuota — el envío y el seguro se reparten según el valor de cada línea.'),
       lineas.map((l, i) => h('div', { className: 'linea-row', key: l.id },
         h('span', { className: 'linea-num' }, i + 1),
+        h('label', { className: 'cotiz-field' },
+          h('span', { className: 'calc-field-label' }, 'Cantidad'),
+          h('div', { className: 'calc-field-input' },
+            h('input', {
+              type: 'number', value: l.cantidad == null ? '' : l.cantidad, placeholder: '—',
+              onChange: e => updLinea(l.id, 'cantidad', e.target.value)
+            }))),
+        h('label', { className: 'cotiz-field' },
+          h('span', { className: 'calc-field-label' }, 'US$ total del renglón'),
+          h('div', { className: 'calc-field-input' },
+            h('span', { className: 'cell-prefix' }, 'US$'),
+            h('input', {
+              type: 'number', step: 'any', value: l.valorUsd == null ? '' : l.valorUsd, placeholder: '—',
+              onChange: e => updLinea(l.id, 'valorUsd', e.target.value)
+            }))),
+        h('label', { className: 'cotiz-field' },
+          h('span', { className: 'calc-field-label' }, 'US$ por unidad'),
+          h('div', { className: 'calc-field-input' },
+            h('span', { className: 'cell-prefix' }, 'US$'),
+            h('input', {
+              type: 'number', step: 'any', value: unitVisible(l), placeholder: '—',
+              onChange: e => updLinea(l.id, 'valorUnitUsd', e.target.value)
+            }))),
         h('label', { className: 'cotiz-field linea-desc' },
           h('span', { className: 'calc-field-label' }, 'Descripción'),
           h('div', { className: 'calc-field-input' },
@@ -1698,33 +1706,25 @@ function CotizacionRow({
               type: 'number', value: l.tasaDie == null ? '' : l.tasaDie, placeholder: '—',
               onChange: e => updLinea(l.id, 'tasaDie', e.target.value)
             }))),
-        h('label', { className: 'cotiz-field' },
-          h('span', { className: 'calc-field-label' }, 'Cantidad'),
-          h('div', { className: 'calc-field-input' },
-            h('input', {
-              type: 'number', value: l.cantidad == null ? '' : l.cantidad, placeholder: '—',
-              onChange: e => updLinea(l.id, 'cantidad', e.target.value)
-            }))),
-        h('label', { className: 'cotiz-field' },
-          h('span', { className: 'calc-field-label' }, 'US$ por unidad'),
-          h('div', { className: 'calc-field-input' },
-            h('span', { className: 'cell-prefix' }, 'US$'),
-            h('input', {
-              type: 'number', step: 'any', value: unitVisible(l), placeholder: '—',
-              onChange: e => updLinea(l.id, 'valorUnitUsd', e.target.value)
-            }))),
-        h('label', { className: 'cotiz-field' },
-          h('span', { className: 'calc-field-label' }, 'US$ total del renglón'),
-          h('div', { className: 'calc-field-input' },
-            h('span', { className: 'cell-prefix' }, 'US$'),
-            h('input', {
-              type: 'number', step: 'any', value: l.valorUsd == null ? '' : l.valorUsd, placeholder: '—',
-              onChange: e => updLinea(l.id, 'valorUsd', e.target.value)
-            }))),
         lineas.length > 1 && h('button', {
           type: 'button', className: 'icon-btn', onClick: () => delLinea(l.id),
           'aria-label': 'Eliminar producto'
         }, h(Trash2, { size: 13 }))))),
+
+    // ---------- Envío, links y TC ----------
+    h('div', { className: 'cotiz-fields-grid' },
+      campo('Envío total', 'envioUsd', 'US$', 'number'),
+      campo('Link ML (competencia)', 'linkML'),
+      campo('Link Alibaba', 'linkAlibaba'),
+      campo('Comisión Alibaba', 'comisionAlibabaUsd', 'US$', 'number'),
+      campo('TC del día', 'tc', '$', 'number'),
+      h('label', { className: 'cotiz-field' },
+        h('span', { className: 'calc-field-label' }, 'Fecha TC'),
+        h('div', { className: 'calc-field-input' },
+          h('input', {
+            type: 'date', value: c.tcFecha || '',
+            onChange: e => onUpdate(c.id, 'tcFecha', e.target.value)
+          })))),
 
     // ---------- Resultado estimado ----------
     !r && h('div', { className: 'sub-empty' },
