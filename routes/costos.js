@@ -92,10 +92,15 @@ module.exports = (app) => {
       }
 
       // ---- 4) Por cada publicación: comisión + envío + promociones ----
+      const skuDe = (attrs) => {
+        const a = (attrs || []).find((x) => x.id === 'SELLER_SKU');
+        return a ? (a.value_name || (a.values && a.values[0] && a.values[0].name) || null) : null;
+      };
       const productos = await enTandas(detalles, 4, async (b) => {
         const p = {
           ml_item_id: b.id,
           titulo: b.title,
+          sku: skuDe(b.attributes),
           precio: b.price,
           categoria: b.category_id,
           listing_type_id: b.listing_type_id,

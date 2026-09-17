@@ -957,7 +957,34 @@ function ProductoCostoCard({
   tcBlue
 }) {
   const [editandoTasas, setEditandoTasas] = useState(false);
+  const [guardandoSku, setGuardandoSku] = useState(false);
+  const [skuMsg, setSkuMsg] = useState('');
+  const [skuError, setSkuError] = useState('');
   const r = calcularCosto(p, tasasCuotas);
+
+  const guardarSku = async () => {
+    const sku = (p.sku || '').trim();
+    if (!sku) { setSkuError('Escribí un SKU antes de guardar.'); return; }
+    const cfg = leerCfgBackend();
+    if (!cfg.url) { setSkuError('Falta configurar la URL del backend (está en el módulo Investigación).'); return; }
+    setGuardandoSku(true); setSkuError(''); setSkuMsg('');
+    try {
+      const base = cfg.url.replace(/\/+$/, '');
+      const resp = await fetch(base + '/api/items/' + p.mlItemId + '/sku', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...(cfg.key ? { 'x-api-key': cfg.key } : {}) },
+        body: JSON.stringify({ sku })
+      });
+      const json = await resp.json();
+      if (!resp.ok) throw new Error(json.error || ('HTTP ' + resp.status));
+      setSkuMsg('Guardado en Mercado Libre.');
+    } catch (e) {
+      setSkuError('No se pudo guardar: ' + e.message);
+    } finally {
+      setGuardandoSku(false);
+    }
+  };
+
   return /*#__PURE__*/React.createElement("div", {
     className: "costo-card"
   }, /*#__PURE__*/React.createElement("div", {
@@ -975,7 +1002,23 @@ function ProductoCostoCard({
     "aria-label": "Eliminar producto"
   }, /*#__PURE__*/React.createElement(Trash2, {
     size: 15
-  }))), /*#__PURE__*/React.createElement("div", {
+  }))),
+  /*#__PURE__*/React.createElement("div", { className: "sku-fila" },
+    p.mlItemId
+      ? /*#__PURE__*/React.createElement(React.Fragment, null,
+          /*#__PURE__*/React.createElement("span", { className: "sku-mla" }, p.mlItemId),
+          /*#__PURE__*/React.createElement("input", {
+            type: "text", className: "sku-input", placeholder: "SKU (ej: JOPEX-COLLAR-01)",
+            value: p.sku || '', onChange: e => onUpdate(p.id, 'sku', e.target.value)
+          }),
+          /*#__PURE__*/React.createElement("button", {
+            type: "button", className: "add-btn sku-guardar-btn", onClick: guardarSku, disabled: guardandoSku
+          }, guardandoSku ? 'Guardando…' : 'Guardar SKU en ML'),
+          skuMsg && /*#__PURE__*/React.createElement("span", { className: "sku-ok" }, skuMsg),
+          skuError && /*#__PURE__*/React.createElement("span", { className: "sku-error" }, skuError))
+      : /*#__PURE__*/React.createElement("span", { className: "sku-sin-vincular" },
+          "Sin vincular a una publicación real todavía — sincronizá con Mercado Libre primero.")),
+  /*#__PURE__*/React.createElement("div", {
     className: "costo-card-body"
   }, /*#__PURE__*/React.createElement("div", {
     className: "costo-block"
@@ -1314,7 +1357,10 @@ function CostosPanel({
             financiamiento: ml.financiacion_pct != null ? ml.financiacion_pct : '',
             promoPct: ml.promocion?.descuento_pct != null ? ml.promocion.descuento_pct : '',
             promoFechaFin: ml.promocion?.hasta || '',
-            cargoFijoML: ml.cargo_fijo != null ? ml.cargo_fijo : null
+            cargoFijoML: ml.cargo_fijo != null ? ml.cargo_fijo : null,
+            // Solo pisamos el SKU si ML ya tiene uno cargado — si todavía está
+            // vacío en ML, no queremos borrar lo que el usuario esté por guardar.
+            ...(ml.sku ? { sku: ml.sku } : {})
           };
           // Control: comparamos el cargo fijo que informa ML contra nuestra tabla.
           if (ml.cargo_fijo != null && ml.precio > 0) {
@@ -5066,6 +5112,25 @@ function JopexPanel() {
         }
         .tasas-editor-row input:focus { outline: none; border-color: var(--lime); }
         .tasas-editor-hint { font-size: 10.5px; color: var(--text-secondary); margin: 6px 0 0; }
+        .sku-fila {
+          display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+          margin: -6px 0 14px;
+        }
+        .sku-mla {
+          font-family: 'Rajdhani', sans-serif; font-size: 11.5px; font-weight: 700;
+          color: var(--text-secondary); background: rgba(255,255,255,0.04);
+          border: 1px solid var(--border-soft); border-radius: 5px; padding: 3px 8px;
+        }
+        .sku-input {
+          background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft);
+          border-radius: 6px; color: var(--text-primary); padding: 5px 8px;
+          font-size: 12px; font-family: 'Inter', sans-serif; flex: 1; min-width: 140px;
+        }
+        .sku-input:focus { outline: none; border-color: var(--lime); }
+        .sku-guardar-btn { padding: 5px 10px; font-size: 11.5px; }
+        .sku-ok { font-size: 11px; color: var(--lime); }
+        .sku-error { font-size: 11px; color: var(--red-glow); }
+        .sku-sin-vincular { font-size: 11.5px; color: var(--text-secondary); font-style: italic; }
         @media (max-width: 900px) {
           .costo-card-body { grid-template-columns: 1fr; }
           .costo-block-output { border-left: none; padding-left: 0; border-top: 1px dashed var(--border-soft); padding-top: 12px; }

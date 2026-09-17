@@ -81,5 +81,40 @@ module.exports = (app) => {
     }
   });
 
+  // PUT /api/items/:id/sku  { sku: "MI-CODIGO" }
+  // Escribe el SKU en el atributo SELLER_SKU de la publicación (o de una
+  // variación puntual si se manda ?variation_id=). Nunca toca otros atributos:
+  // ML mergea por id de atributo, no reemplaza la lista completa.
+  router.put('/:id/sku', async (req, res) => {
+    const { id } = req.params;
+    const { sku } = req.body || {};
+    const variationId = req.query.variation_id;
+    if (!sku || !String(sku).trim()) {
+      return res.status(400).json({ error: 'Falta el SKU a guardar.' });
+    }
+    try {
+      const token = await app.locals.getAccessTokenValido();
+      const auth = { headers: { Authorization: `Bearer ${token}` } };
+      const payload = { id: 'SELLER_SKU', value_name: String(sku).trim() };
+
+      if (variationId) {
+        await axios.put(`${app.locals.ML_API}/items/${id}`, {
+          variations: [{ id: Number(variationId), attributes: [payload] }],
+        }, auth);
+      } else {
+        await axios.put(`${app.locals.ML_API}/items/${id}`, {
+          attributes: [payload],
+        }, auth);
+      }
+      res.json({ ok: true, id, variation_id: variationId || null, sku: payload.value_name });
+    } catch (err) {
+      console.error(err.response?.data || err.message);
+      res.status(500).json({
+        error: 'No se pudo guardar el SKU en Mercado Libre.',
+        detalle: err.response?.data?.message || err.response?.data || err.message,
+      });
+    }
+  });
+
   return router;
 };
