@@ -2717,7 +2717,13 @@ function InvestigacionPanel({
     // producto; si ninguna está elegida todavía, la última cargada.
     const gKey = keyGrupo(g);
     const elegidoItem = g.items.find(x => estadoDe(x) === 'elegido');
-    const defaultExpandedId = elegidoItem ? elegidoItem.id : g.items[g.items.length - 1].id;
+    // En el celular, mostrar todo expandido de entrada arma una pared de
+    // formularios imposible de escanear con varios productos — ahí arranca
+    // todo colapsado; en escritorio se mantiene el comportamiento de abrir
+    // la elegida (o la última cargada) para seguir viendo el detalle rápido.
+    const esMovil = typeof window !== 'undefined'
+      && window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
+    const defaultExpandedId = esMovil ? null : (elegidoItem ? elegidoItem.id : g.items[g.items.length - 1].id);
     const expandedId = expandidoPorGrupo[gKey] !== undefined ? expandidoPorGrupo[gKey] : defaultExpandedId;
     return /*#__PURE__*/React.createElement("div", {
     className: "cotiz-grupo",
@@ -6413,7 +6419,21 @@ function JopexPanel() {
         @media (max-width: 480px) {
           .cotiz-fields-grid, .promo-fields, .rango-grid,
           .viabilidad-out, .stock-params-grid { grid-template-columns: 1fr; }
-          .kpi-row { grid-template-columns: 1fr; }
+          /* Antes: 3 tarjetas KPI apiladas a todo el ancho = media pantalla de
+             scroll antes de llegar a los productos. Ahora: carrusel horizontal
+             deslizable, mucho más compacto. */
+          .kpi-row {
+            display: flex; grid-template-columns: none; overflow-x: auto; gap: 10px;
+            margin-bottom: 18px; padding-bottom: 4px; -webkit-overflow-scrolling: touch;
+            scroll-snap-type: x proximity;
+          }
+          .kpi-card { min-width: 200px; flex: 0 0 auto; scroll-snap-align: start; padding: 13px 15px; }
+          /* Barra de TC: en escritorio se acomoda en una fila; en celular
+             venía apilando label/input/botón/nota en 4 líneas separadas
+             antes de llegar a "Productos". La compactamos a dos filas. */
+          .tc-bar { padding: 10px 12px; gap: 8px; }
+          .tc-label { flex-basis: 100%; }
+          .tc-fuente { flex-basis: 100%; font-size: 10px; }
           .costo-out-grid { grid-template-columns: 1fr 1fr; }
           .jopex-main { padding-left: 10px; padding-right: 10px; }
           .costo-card { padding: 13px 11px; }
