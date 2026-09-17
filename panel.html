@@ -383,6 +383,11 @@ const TrendingUp = props => /*#__PURE__*/React.createElement(Icon, props, /*#__P
 }), /*#__PURE__*/React.createElement("polyline", {
   points: "17 6 23 6 23 12"
 }));
+const CreditCard = props => /*#__PURE__*/React.createElement(Icon, props, /*#__PURE__*/React.createElement("rect", {
+  x: "1", y: "4", width: "22", height: "16", rx: "2", ry: "2"
+}), /*#__PURE__*/React.createElement("line", {
+  x1: "1", y1: "10", x2: "23", y2: "10"
+}));
 const Search = props => /*#__PURE__*/React.createElement(Icon, props, /*#__PURE__*/React.createElement("circle", {
   cx: "11",
   cy: "11",
@@ -472,6 +477,10 @@ const MODULES = [{
   id: 'stock',
   label: 'Stock',
   icon: Boxes
+}, {
+  id: 'tiendanube',
+  label: 'Tienda Nube',
+  icon: CreditCard
 }];
 
 // Columnas editables por módulo genérico (Ads, Investigación — el resto tiene
@@ -488,7 +497,8 @@ const MODULE_DESC = {
   ads: 'Objetivo, margen real y ROAS/ACOS aceptable por publicación. El margen sale de Costos; el objetivo y el ROAS los definís vos.',
   evolucion: 'Flujo de caja neto mensual de toda la tienda, replicando la hoja FLUJO: Subtotal, Utilidad Bruta y Resultado Neto calculados mes a mes.',
   investigacion: 'Cotizaciones de proveedores por producto candidato: landed cost estimado antes de comprar, comparando varias ofertas a la vez.',
-  stock: 'Modelo Min-Max con cobertura: D, L, SS, Mínimo y Máximo calculados de tu historial real de ventas y envíos. Alerta cuando el Total Disponible cae debajo del Mínimo.'
+  stock: 'Modelo Min-Max con cobertura: D, L, SS, Mínimo y Máximo calculados de tu historial real de ventas y envíos. Alerta cuando el Total Disponible cae debajo del Mínimo.',
+  tiendanube: 'Precio sugerido y margen real por producto en tu tienda Tiendanube, según la pasarela de pago (Pago Nube o Mercado Pago). El costo del producto sale de Costos.'
 };
 
 // ---------- Evolución: replica la cascada real de la hoja FLUJO del usuario ----------
@@ -1537,7 +1547,236 @@ function CostosPanel({
       "Última sincronización: " + new Date(syncInfo.generado_en).toLocaleString('es-AR')))));
 }
 
-// ---------- Investigación: cotizaciones de proveedores, agrupadas por producto candidato ----------
+// ---------- Tienda Nube: precio sugerido y margen real por pasarela ----------
+// El costo del producto sale de Costos (valorAdquisicion) — no se vuelve a
+// cargar acá. Tasas verificadas por el usuario contra su cuenta real
+// (16/09/2026): panel "Medios de pago" de Tiendanube + Simulador de costos
+// de Mercado Pago. Editables porque cambian por promoción o por cuenta.
+//   Coeficiente $ = 1 − (Comisión×(1+IVA) [+ CPT en MP] + Financiación×(1+IVA) + Margen)
+//   Precio        = Costo / Coeficiente $
+//   Acredita la pasarela = Precio × (1 − Comisión − Financiación)   [ANTES del costo]
+//   Margen real ($)      = Acredita la pasarela − Costo             [DESPUÉS del costo]
+const PN_PLAZOS_DEFAULT = { '1': 6.09, '7': 4.39, '14': 3.49 };
+const PN_PLAZOS_LABEL = { '1': '1 día', '7': '7 días', '14': '14 días' };
+const PN_CUOTAS_DEFAULT = { '2': 7.70, '3': 10.45, '6': 13.67, '9': 18.36, '12': 22.00 };
+const MP_PLAZOS_DEFAULT = { 'momento': 6.29, '10': 4.39, '18': 3.39 };
+const MP_PLAZOS_LABEL = { 'momento': 'En el momento', '10': '10 días', '18': '18 días' };
+const MP_CUOTAS_DEFAULT = { '3': 10.49, '6': 18.69, '9': 26.49, '12': 32.29 };
+
+function calcularPasarela({ costo, margenPct, ivaPct, comisionBasePct, cptPct, finPct }) {
+  const iva = 1 + (Number(ivaPct) || 0) / 100;
+  const margen = (Number(margenPct) || 0) / 100;
+  const comisionBase = Number(comisionBasePct);
+  const fin = Number(finPct);
+  if (isNaN(comisionBase) || isNaN(fin) || isNaN(margen)) return { error: true };
+  const comision = (comisionBase / 100) * iva + (Number(cptPct || 0) / 100);
+  const finPropor = (fin / 100) * iva;
+  const coef = 1 - comision - finPropor - margen;
+  if (coef <= 0) return { error: true, comision, fin: finPropor };
+  const precio = costo / coef;
+  const deposito = precio * (1 - comision - finPropor);
+  const margenReal = deposito - costo; // = precio * margen, por construcción del coeficiente
+  return { comision, fin: finPropor, coef, precio, deposito, margenReal };
+}
+
+function TarjetaPasarela({
+  nombre, colorClase, plazoLabel, plazoValue, plazoOpciones, onPlazo,
+  cuotasValue, cuotasOpciones, onCuotas, cptPct, onCpt, resultado
+}) {
+  const h = React.createElement;
+  return h('div', { className: 'tn-pasarela ' + colorClase },
+    h('h4', null, nombre),
+    h('label', { className: 'calc-field' },
+      h('span', { className: 'calc-field-label' }, 'Plazo de acreditación'),
+      h('div', { className: 'calc-field-input' },
+        h('select', { value: plazoValue, onChange: e => onPlazo(e.target.value) },
+          Object.keys(plazoOpciones).map(k => h('option', { key: k, value: k },
+            (plazoLabel[k] || k) + ' — ' + plazoOpciones[k] + '% + IVA'))))),
+    onCpt && h('label', { className: 'calc-field' },
+      h('span', { className: 'calc-field-label' }, 'CPT (%)'),
+      h('div', { className: 'calc-field-input' },
+        h('span', { className: 'cell-prefix' }, '%'),
+        h('input', {
+          type: 'number', step: '0.1', value: cptPct,
+          onChange: e => onCpt(e.target.value)
+        }))),
+    h('label', { className: 'calc-field' },
+      h('span', { className: 'calc-field-label' }, 'Cuotas sin interés a ofrecer'),
+      h('div', { className: 'calc-field-input' },
+        h('select', { value: cuotasValue, onChange: e => onCuotas(e.target.value) },
+          Object.keys(cuotasOpciones).map(k => h('option', { key: k, value: k },
+            k + ' cuotas — ' + cuotasOpciones[k] + '% + IVA'))))),
+    resultado.error
+      ? h('div', { className: 'data-note', style: { marginBottom: 0 } },
+          'Los costos + margen superan el 100% — bajá el margen o la cantidad de cuotas.')
+      : h(React.Fragment, null,
+          h('div', { className: 'precio-hero' }, money(resultado.precio)),
+          h('div', { className: 'tramo-nota' }, 'Precio sugerido para vender por ' + nombre),
+          h('div', { className: 'costo-out-grid' },
+            h(CampoCalculado, { label: 'Comisión (c/IVA' + (onCpt ? ' + CPT' : '') + ')', value: pct(resultado.comision * 100) }),
+            h(CampoCalculado, { label: 'Financiación cuotas (c/IVA)', value: pct(resultado.fin * 100) }),
+            h(CampoCalculado, { label: 'Acredita ' + nombre, value: money(resultado.deposito) }),
+            h(CampoCalculado, { label: 'Margen real ($)', value: money(resultado.margenReal), highlight: true }))));
+}
+
+function TarjetaTiendaNube({ tn, productos, onUpdate, onRemove, cfg }) {
+  const h = React.createElement;
+  const producto = (productos || []).find(p => p.id === tn.productoId);
+  const costo = producto ? Number(producto.valorAdquisicion) : NaN;
+  const costoOk = !isNaN(costo) && costo > 0;
+
+  const pn = costoOk ? calcularPasarela({
+    costo, margenPct: tn.margenPct, ivaPct: cfg.ivaPct,
+    comisionBasePct: cfg.pnPlazos[tn.pnPlazo], finPct: cfg.pnCuotas[tn.pnCuotas]
+  }) : { error: true };
+  const mp = costoOk ? calcularPasarela({
+    costo, margenPct: tn.margenPct, ivaPct: cfg.ivaPct,
+    comisionBasePct: cfg.mpPlazos[tn.mpPlazo], cptPct: tn.mpCpt, finPct: cfg.mpCuotas[tn.mpCuotas]
+  }) : { error: true };
+
+  return h('div', { className: 'costo-card' },
+    h('div', { className: 'costo-card-header' },
+      h('div', { className: 'calc-field-input tn-producto-select' },
+        h('select', {
+          value: tn.productoId || '',
+          onChange: e => onUpdate(tn.id, 'productoId', e.target.value)
+        },
+          h('option', { value: '' }, '— Elegí un producto de Costos —'),
+          (productos || []).map(p => h('option', { key: p.id, value: p.id }, p.nombre || '(sin nombre)')))),
+      h('button', {
+        type: 'button', className: 'icon-btn', onClick: () => onRemove(tn.id),
+        'aria-label': 'Eliminar'
+      }, h(Trash2, { size: 15 }))),
+    !tn.productoId && h('div', { className: 'sub-empty' }, 'Elegí un producto para traer su costo desde Costos.'),
+    tn.productoId && !costoOk && h('div', { className: 'data-note' },
+      'Este producto todavía no tiene Valor de Adquisición cargado en Costos.'),
+    costoOk && h(React.Fragment, null,
+      h('div', { className: 'tn-costo-margen' },
+        h(CampoCalculado, { label: 'Costo del producto (desde Costos)', value: money(costo) }),
+        h('label', { className: 'calc-field' },
+          h('span', { className: 'calc-field-label' }, 'Margen de utilidad deseado (Tienda Nube)'),
+          h('div', { className: 'calc-field-input' },
+            h('span', { className: 'cell-prefix' }, '%'),
+            h('input', {
+              type: 'number', step: '0.5', value: tn.margenPct,
+              onChange: e => onUpdate(tn.id, 'margenPct', e.target.value)
+            })))),
+      h('div', { className: 'tn-pasarelas-grid' },
+        h(TarjetaPasarela, {
+          nombre: 'Pago Nube', colorClase: 'tn-pn',
+          plazoLabel: PN_PLAZOS_LABEL, plazoValue: tn.pnPlazo, plazoOpciones: cfg.pnPlazos,
+          onPlazo: v => onUpdate(tn.id, 'pnPlazo', v),
+          cuotasValue: tn.pnCuotas, cuotasOpciones: cfg.pnCuotas,
+          onCuotas: v => onUpdate(tn.id, 'pnCuotas', v),
+          resultado: pn
+        }),
+        h(TarjetaPasarela, {
+          nombre: 'Mercado Pago', colorClase: 'tn-mp',
+          plazoLabel: MP_PLAZOS_LABEL, plazoValue: tn.mpPlazo, plazoOpciones: cfg.mpPlazos,
+          onPlazo: v => onUpdate(tn.id, 'mpPlazo', v),
+          cuotasValue: tn.mpCuotas, cuotasOpciones: cfg.mpCuotas,
+          onCuotas: v => onUpdate(tn.id, 'mpCuotas', v),
+          cptPct: tn.mpCpt, onCpt: v => onUpdate(tn.id, 'mpCpt', v),
+          resultado: mp
+        }))));
+}
+
+function tiendaNubeVacio() {
+  return {
+    id: 'tn' + Date.now() + Math.random().toString(36).slice(2, 6),
+    productoId: '',
+    margenPct: 35,
+    pnPlazo: '7', pnCuotas: '3',
+    mpPlazo: '10', mpCuotas: '3', mpCpt: 2
+  };
+}
+
+function TiendaNubePanel({ productos }) {
+  const h = React.createElement;
+  const [items, setItems] = useState(() => {
+    try {
+      const s = window.localStorage.getItem('jopex_tiendanube_items');
+      return s ? JSON.parse(s) : [];
+    } catch (e) { return []; }
+  });
+  React.useEffect(() => {
+    try { window.localStorage.setItem('jopex_tiendanube_items', JSON.stringify(items)); } catch (e) {}
+  }, [items]);
+
+  const [cfg, setCfg] = useState(() => {
+    const base = { ivaPct: 21, pnPlazos: { ...PN_PLAZOS_DEFAULT }, pnCuotas: { ...PN_CUOTAS_DEFAULT },
+      mpPlazos: { ...MP_PLAZOS_DEFAULT }, mpCuotas: { ...MP_CUOTAS_DEFAULT } };
+    try {
+      const s = window.localStorage.getItem('jopex_tiendanube_cfg');
+      if (!s) return base;
+      const g = JSON.parse(s);
+      return {
+        ivaPct: g.ivaPct ?? base.ivaPct,
+        pnPlazos: { ...base.pnPlazos, ...(g.pnPlazos || {}) },
+        pnCuotas: { ...base.pnCuotas, ...(g.pnCuotas || {}) },
+        mpPlazos: { ...base.mpPlazos, ...(g.mpPlazos || {}) },
+        mpCuotas: { ...base.mpCuotas, ...(g.mpCuotas || {}) }
+      };
+    } catch (e) { return base; }
+  });
+  React.useEffect(() => {
+    try { window.localStorage.setItem('jopex_tiendanube_cfg', JSON.stringify(cfg)); } catch (e) {}
+  }, [cfg]);
+  const [editandoTasas, setEditandoTasas] = useState(false);
+
+  const updateTasa = (grupo, key, valor) => {
+    setCfg(prev => ({ ...prev, [grupo]: { ...prev[grupo], [key]: valor === '' ? '' : Number(valor) } }));
+  };
+  const updateItem = (id, field, value) => {
+    setItems(prev => prev.map(it => it.id === id ? { ...it, [field]: value } : it));
+  };
+  const addItem = () => setItems(prev => [...prev, tiendaNubeVacio()]);
+  const removeItem = id => setItems(prev => prev.filter(it => it.id !== id));
+
+  const columnaTasas = (titulo, opciones, labels, grupo) => h('div', { className: 'tn-tasas-col' },
+    h('h5', null, titulo),
+    Object.keys(opciones).map(k => h('div', { className: 'tasas-editor-row', key: k },
+      h('span', null, (labels && labels[k]) || (grupo.includes('Cuotas') ? k + ' cuotas' : k)),
+      h('span', null, h('input', {
+        type: 'number', step: '0.01', value: opciones[k],
+        onChange: e => updateTasa(grupo, k, e.target.value)
+      }), ' %'))));
+
+  return h('div', { className: 'module-panel' },
+    h('div', { className: 'module-header' },
+      h('h1', null, 'Tienda Nube'),
+      h('p', null, MODULE_DESC.tiendanube)),
+    h('div', { className: 'data-note' },
+      'El costo de cada producto sale directo de Costos (Valor de Adquisición) — no se carga de nuevo acá. El margen lo definís vos, específico para este canal de venta.'),
+    h('button', {
+      type: 'button', className: 'tasas-editor-toggle', onClick: () => setEditandoTasas(v => !v)
+    }, editandoTasas ? '⚙ Cerrar edición de tasas' : '⚙ Editar tasas de Pago Nube / Mercado Pago'),
+    editandoTasas && h('div', { className: 'tasas-editor tn-tasas-editor' },
+      h('div', { className: 'tn-tasas-col' },
+        h('h5', null, 'IVA'),
+        h('div', { className: 'tasas-editor-row' },
+          h('span', null, 'IVA general'),
+          h('span', null, h('input', {
+            type: 'number', step: '0.5', value: cfg.ivaPct,
+            onChange: e => setCfg(prev => ({ ...prev, ivaPct: Number(e.target.value) }))
+          }), ' %'))),
+      columnaTasas('Pago Nube — plazo de acreditación', cfg.pnPlazos, PN_PLAZOS_LABEL, 'pnPlazos'),
+      columnaTasas('Pago Nube — cuotas sin interés', cfg.pnCuotas, null, 'pnCuotas'),
+      columnaTasas('Mercado Pago — plazo de acreditación', cfg.mpPlazos, MP_PLAZOS_LABEL, 'mpPlazos'),
+      columnaTasas('Mercado Pago — cuotas sin interés', cfg.mpCuotas, null, 'mpCuotas'),
+      h('p', { className: 'tasas-editor-hint' },
+        'Estas son las tasas que vos mismo relevaste del panel de Tiendanube y del Simulador de Mercado Pago — actualizalas cuando cambien (no son valores genéricos de internet).')),
+    h('div', { className: 'table-section-header' },
+      h('h2', {
+        style: { fontFamily: "'Rajdhani', sans-serif", fontSize: 17, fontWeight: 700, margin: 0, color: 'var(--text-primary)' }
+      }, 'Productos'),
+      h('button', { type: 'button', className: 'add-btn', onClick: addItem }, h(Plus, { size: 16 }), 'Agregar producto')),
+    items.length === 0 && h('div', { className: 'sub-empty' }, 'Todavía no agregaste ningún producto.'),
+    h('div', { className: 'costo-cards-grid' },
+      items.map(tn => h(TarjetaTiendaNube, {
+        key: tn.id, tn: tn, productos: productos, onUpdate: updateItem, onRemove: removeItem, cfg: cfg
+      }))));
+}
 // Replica la lógica real de PARRILLA PRODUCTOS, con dos correcciones acordadas con el usuario:
 //   1. Comisión Alibaba se separó de "Seguro" y NO integra la base de Derecho/Estadística/IVA
 //      (esa base es CIF real: Cotización+Envío+Seguro). La comisión se suma directo al Total USD.
@@ -4456,6 +4695,9 @@ function ModulePanel({
     setCfg: setAdsCfg,
     seleccion: sel.ads
   });
+  if (moduleId === 'tiendanube') return /*#__PURE__*/React.createElement(TiendaNubePanel, {
+    productos: productos
+  });
   return /*#__PURE__*/React.createElement(GenericModulePanel, {
     moduleId: moduleId
   });
@@ -4479,7 +4721,9 @@ const CLAVES_RESPALDO = [
   'jopex_backend_url',
   'jopex_backend_key',
   'jopex_tasas_cuotas',
-  'jopex_tc_blue'
+  'jopex_tc_blue',
+  'jopex_tiendanube_items',
+  'jopex_tiendanube_cfg'
 ];
 
 // ---------------------------------------------------------------------------
@@ -5131,6 +5375,39 @@ function JopexPanel() {
         .sku-ok { font-size: 11px; color: var(--lime); }
         .sku-error { font-size: 11px; color: var(--red-glow); }
         .sku-sin-vincular { font-size: 11.5px; color: var(--text-secondary); font-style: italic; }
+        .tn-producto-select { width: 100%; margin-right: 10px; }
+        .tn-producto-select select { width: 100%; }
+        .tn-costo-margen {
+          display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+          margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px dashed var(--border-soft);
+        }
+        .tn-pasarelas-grid {
+          display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+        }
+        @media (max-width: 900px) {
+          .tn-costo-margen { grid-template-columns: 1fr; }
+          .tn-pasarelas-grid { grid-template-columns: 1fr; }
+        }
+        .tn-pasarela {
+          border-radius: 10px; padding: 14px 16px;
+          border: 1px solid var(--border-soft); background: rgba(255,255,255,0.02);
+        }
+        .tn-pasarela h4 {
+          font-family: 'Rajdhani', sans-serif; font-size: 13px; font-weight: 700;
+          text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 10px;
+        }
+        .tn-pn { border-color: rgba(61, 155, 255, 0.35); }
+        .tn-pn h4 { color: var(--blue-glow); }
+        .tn-mp { border-color: rgba(0, 174, 239, 0.35); }
+        .tn-mp h4 { color: #00aeef; }
+        .tn-tasas-editor {
+          display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px;
+        }
+        .tn-tasas-col h5 {
+          font-family: 'Rajdhani', sans-serif; font-size: 11.5px; font-weight: 700;
+          text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-secondary);
+          margin: 0 0 8px;
+        }
         @media (max-width: 900px) {
           .costo-card-body { grid-template-columns: 1fr; }
           .costo-block-output { border-left: none; padding-left: 0; border-top: 1px dashed var(--border-soft); padding-top: 12px; }
