@@ -819,6 +819,11 @@ const TRAMOS_CARGO_FIJO = [
   { desde: 24000, hasta: 32999,    fijo: 2950 },
   { desde: 33000, hasta: Infinity, fijo: 0 }
 ];
+// ---------- Costo de financiación por cantidad de cuotas ----------
+// La API de ML (financing_add_on_fee) devuelve un solo % sin decir a qué plan
+// de cuotas corresponde. En vez de adivinar, el usuario mantiene esta tabla
+// editable desde el panel (arranca con la tarifa vigente al 02/09/2026).
+const TASAS_CUOTAS_DEFAULT = { '3': 8.90, '6': 13.40, '9': 17.80, '12': 21.60 };
 function cargoFijoDe(precio) {
   const t = TRAMOS_CARGO_FIJO.find(t => precio >= t.desde && precio <= t.hasta);
   return t ? t.fijo : 0;
@@ -838,11 +843,12 @@ function resolverPrecio(base, coef) {
   return { precio: sinFijo.desde, cargoFijo: 0, salto: true };
 }
 
-function calcularCosto(p) {
+function calcularCosto(p, tasasCuotas) {
   const valorAdq = Number(p.valorAdquisicion);
   const envio = Number(p.envioML);
   const cargo = Number(p.cargoVenta);
-  const fin = Number(p.financiamiento);
+  const cuotas = p.cuotas || '6';
+  const fin = Number((tasasCuotas || TASAS_CUOTAS_DEFAULT)[cuotas]);
   const mg = Number(p.mgUtilidad);
   if (!valorAdq || isNaN(valorAdq) || isNaN(envio) || isNaN(cargo) || isNaN(fin) || !mg || isNaN(mg)) {
     return null;
@@ -861,7 +867,12 @@ function calcularCosto(p) {
   const financiamientoARS = precio * (fin / 100);
   const envioCliente = envio;
   const costoProductoARS = valorAdq;
-  const reciboPorVenta = precio - comisionML - financiamientoARS - envioCliente - costoProductoARS;
+  // Depósito de ML: lo que efectivamente te acredita, ANTES de restar el costo
+  // del producto (esto es lo que controlás en tesorería/flujo de caja).
+  const depositoML = precio - comisionML - financiamientoARS - envioCliente;
+  // Margen real: lo que te queda una vez descontado también el costo del
+  // producto. No es lo mismo que el depósito — acá está la ganancia de verdad.
+  const reciboPorVenta = depositoML - costoProductoARS;
   const gananciaSobreCosto = reciboPorVenta / valorAdq * 100;
   const margenReal = reciboPorVenta / precio * 100;
   const roasMinimo = 100 / mg;
@@ -898,7 +909,7 @@ function calcularCosto(p) {
 
   return {
     subtotal, coeficiente, precio, cargoFijo, salto: sol.salto, avisoSalto,
-    comisionML, financiamientoARS, envioCliente, costoProductoARS,
+    comisionML, financiamientoARS, envioCliente, costoProductoARS, depositoML, cuotas,
     reciboPorVenta, gananciaSobreCosto, margenReal, mgUtilidad: mg, roasMinimo, promo
   };
 }
@@ -940,9 +951,13 @@ function CampoCalculado({
 function ProductoCostoCard({
   p,
   onUpdate,
-  onRemove
+  onRemove,
+  tasasCuotas,
+  onUpdateTasa,
+  tcBlue
 }) {
-  const r = calcularCosto(p);
+  const [editandoTasas, setEditandoTasas] = useState(false);
+  const r = calcularCosto(p, tasasCuotas);
   return /*#__PURE__*/React.createElement("div", {
     className: "costo-card"
   }, /*#__PURE__*/React.createElement("div", {
@@ -981,12 +996,33 @@ function ProductoCostoCard({
     prefix: "%",
     value: p.cargoVenta,
     onChange: v => onUpdate(p.id, 'cargoVenta', v)
-  }), /*#__PURE__*/React.createElement(CampoInput, {
-    label: "% Costo Financiación",
-    prefix: "%",
-    value: p.financiamiento,
-    onChange: v => onUpdate(p.id, 'financiamiento', v)
-  }), /*#__PURE__*/React.createElement(CampoInput, {
+  }),
+  /*#__PURE__*/React.createElement("label", { className: "calc-field" },
+    /*#__PURE__*/React.createElement("span", { className: "calc-field-label" }, "Cuotas"),
+    /*#__PURE__*/React.createElement("div", { className: "calc-field-input" },
+      /*#__PURE__*/React.createElement("select", {
+        value: p.cuotas || '6',
+        onChange: e => onUpdate(p.id, 'cuotas', e.target.value)
+      },
+        Object.keys(tasasCuotas || TASAS_CUOTAS_DEFAULT).map(c =>
+          /*#__PURE__*/React.createElement("option", { key: c, value: c }, c + ' cuotas'))))),
+  /*#__PURE__*/React.createElement("button", {
+    type: "button", className: "tasas-editor-toggle",
+    onClick: () => setEditandoTasas(v => !v)
+  }, editandoTasas ? '⚙ Cerrar edición de tasas' : '⚙ Editar tasas de financiación'),
+  editandoTasas && /*#__PURE__*/React.createElement("div", { className: "tasas-editor" },
+    Object.keys(tasasCuotas || TASAS_CUOTAS_DEFAULT).map(c =>
+      /*#__PURE__*/React.createElement("div", { key: c, className: "tasas-editor-row" },
+        /*#__PURE__*/React.createElement("span", null, c + ' cuotas'),
+        /*#__PURE__*/React.createElement("span", null,
+          /*#__PURE__*/React.createElement("input", {
+            type: "number", step: "0.01",
+            value: (tasasCuotas || TASAS_CUOTAS_DEFAULT)[c],
+            onChange: e => onUpdateTasa(c, e.target.value)
+          }), ' %'))),
+    /*#__PURE__*/React.createElement("p", { className: "tasas-editor-hint" },
+      'Esta tabla es global (vale para todos los productos). Actualizala cuando Mercado Libre cambie sus tarifas de cuotas.')),
+  /*#__PURE__*/React.createElement(CampoInput, {
     label: "% Mg. de Utilidad deseado",
     prefix: "%",
     value: p.mgUtilidad,
@@ -1020,7 +1056,7 @@ function ProductoCostoCard({
     value: r.cargoFijo > 0 ? money(r.cargoFijo) : "$0",
     highlight: r.cargoFijo > 0
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
-    label: "Financiamiento",
+    label: "Financiamiento (" + r.cuotas + " cuotas)",
     value: money(r.financiamientoARS)
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Envío al cliente",
@@ -1029,20 +1065,27 @@ function ProductoCostoCard({
     label: "Costo del producto",
     value: money(r.costoProductoARS)
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
-    label: "Recibo por venta",
-    value: money(r.reciboPorVenta),
-    highlight: true
+    label: "Depósito de Mercado Libre",
+    value: money(r.depositoML)
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Ganancia s/costo producto",
     value: pct(r.gananciaSobreCosto)
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
-    label: "Margen real",
-    value: pct(r.margenReal),
-    highlight: true
-  }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "ROAS mínimo teórico",
     value: r.roasMinimo.toFixed(2),
     highlight: true
+  }), /*#__PURE__*/React.createElement(CampoCalculado, {
+    label: "Margen real (%)",
+    value: pct(r.margenReal),
+    highlight: true
+  }), /*#__PURE__*/React.createElement(CampoCalculado, {
+    label: "Margen real ($)",
+    value: money(r.reciboPorVenta),
+    highlight: true
+  }), /*#__PURE__*/React.createElement(CampoCalculado, {
+    label: "Margen real (USD)",
+    value: tcBlue ? moneyUsd(r.reciboPorVenta / tcBlue) : '— (cargá el TC arriba)',
+    highlight: !!tcBlue
   }))))), /*#__PURE__*/React.createElement("div", {
     className: "promo-block"
   }, /*#__PURE__*/React.createElement("h4", null, "Promoción vigente"), /*#__PURE__*/React.createElement("div", {
@@ -1161,7 +1204,7 @@ function CostosPanel({
       valorAdquisicion: '',
       envioML: '',
       cargoVenta: '',
-      financiamiento: '',
+      cuotas: '6',
       mgUtilidad: '',
       promoPct: '',
       promoFechaFin: ''
@@ -1189,6 +1232,57 @@ function CostosPanel({
       if (syncInfo) window.localStorage.setItem('jopex_sync_costos', JSON.stringify(syncInfo));
     } catch (e) {}
   }, [syncInfo]);
+
+  // ---------- NUEVO: tabla global de tasas de financiación por cuotas ----------
+  const [tasasCuotas, setTasasCuotas] = useState(() => {
+    try {
+      const s = window.localStorage.getItem('jopex_tasas_cuotas');
+      return s ? { ...TASAS_CUOTAS_DEFAULT, ...JSON.parse(s) } : { ...TASAS_CUOTAS_DEFAULT };
+    } catch (e) { return { ...TASAS_CUOTAS_DEFAULT }; }
+  });
+  React.useEffect(() => {
+    try { window.localStorage.setItem('jopex_tasas_cuotas', JSON.stringify(tasasCuotas)); } catch (e) {}
+  }, [tasasCuotas]);
+  const updateTasa = (cuotas, valor) => {
+    setTasasCuotas(prev => ({ ...prev, [cuotas]: valor === '' ? '' : Number(valor) }));
+  };
+
+  // ---------- NUEVO: tipo de cambio (dólar blue), global para todo el panel ----------
+  const [tcBlue, setTcBlueState] = useState(() => {
+    try {
+      const s = window.localStorage.getItem('jopex_tc_blue');
+      return s ? JSON.parse(s).valor : null;
+    } catch (e) { return null; }
+  });
+  const [tcBlueFuente, setTcBlueFuente] = useState(() => {
+    try {
+      const s = window.localStorage.getItem('jopex_tc_blue');
+      return s ? JSON.parse(s).actualizado : '';
+    } catch (e) { return ''; }
+  });
+  const [tcBlueError, setTcBlueError] = useState('');
+  const guardarTC = (valor, actualizado) => {
+    setTcBlueState(valor);
+    setTcBlueFuente(actualizado);
+    try { window.localStorage.setItem('jopex_tc_blue', JSON.stringify({ valor, actualizado })); } catch (e) {}
+  };
+  const refrescarTC = async () => {
+    setTcBlueError('');
+    try {
+      const resp = await fetch('https://dolarapi.com/v1/dolares/blue');
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      if (!data.venta) throw new Error('La respuesta no trajo el valor de venta.');
+      guardarTC(data.venta, new Date().toLocaleString('es-AR'));
+    } catch (e) {
+      setTcBlueError('No se pudo traer el dólar blue automático (' + e.message + '). Cargalo a mano abajo.');
+    }
+  };
+
+  React.useEffect(() => {
+    if (tcBlue == null) refrescarTC();
+    // eslint-disable-next-line
+  }, []);
 
   const sincronizarML = async () => {
     const cfg = leerCfgBackend();
@@ -1280,7 +1374,7 @@ function CostosPanel({
     }
   };
 
-  const resultados = productos.map(p => calcularCosto(p)).filter(r => r && !r.error);
+  const resultados = productos.map(p => calcularCosto(p, tasasCuotas)).filter(r => r && !r.error);
   const margenProm = resultados.length ? resultados.reduce((s, r) => s + r.mgUtilidad, 0) / resultados.length : null;
   const roasPeor = resultados.length ? Math.max(...resultados.map(r => r.roasMinimo)) : null;
   const bajoUmbral = resultados.filter(r => r.mgUtilidad < 35).length;
@@ -1288,7 +1382,19 @@ function CostosPanel({
     className: "module-panel"
   }, /*#__PURE__*/React.createElement("div", {
     className: "module-header"
-  }, /*#__PURE__*/React.createElement("h1", null, "Costos"), /*#__PURE__*/React.createElement("p", null, MODULE_DESC.costos)), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("h1", null, "Costos"), /*#__PURE__*/React.createElement("p", null, MODULE_DESC.costos)),
+  /*#__PURE__*/React.createElement("div", { className: "tc-bar" },
+    /*#__PURE__*/React.createElement("span", { className: "calc-field-label" }, "Tipo de cambio — dólar blue"),
+    /*#__PURE__*/React.createElement("div", { className: "calc-field-input tc-value-box" },
+      /*#__PURE__*/React.createElement("span", { className: "cell-prefix" }, "$"),
+      /*#__PURE__*/React.createElement("input", {
+        type: "number", value: tcBlue == null ? '' : tcBlue, placeholder: '—',
+        onChange: e => guardarTC(e.target.value === '' ? null : Number(e.target.value), 'cargado a mano')
+      })),
+    /*#__PURE__*/React.createElement("button", { type: "button", className: "add-btn", onClick: refrescarTC }, "⟳ Refrescar"),
+    /*#__PURE__*/React.createElement("span", { className: "tc-fuente" },
+      tcBlueError || (tcBlueFuente ? 'Última actualización: ' + tcBlueFuente + ' (dolarapi.com, blue).' : 'Todavía no se cargó el TC.'))),
+  /*#__PURE__*/React.createElement("div", {
     className: "data-note"
   }, "Misma cascada que tu hoja COSTO: cargás el costo, los cargos de ML y el margen que querés — el panel calcula el precio de venta sugerido y todo el desglose. Usalo para comparar contra la competencia antes de publicar el precio final."), /*#__PURE__*/React.createElement("div", {
     className: "kpi-row"
@@ -1353,7 +1459,10 @@ function CostosPanel({
       key: p.id,
       p: p,
       onUpdate: updateField,
-      onRemove: removeProducto
+      onRemove: removeProducto,
+      tasasCuotas: tasasCuotas,
+      onUpdateTasa: updateTasa,
+      tcBlue: tcBlue
     }))), /*#__PURE__*/React.createElement("div", {
     className: "sub-block"
   }, /*#__PURE__*/React.createElement("h3", null, "Historial de lotes (por producto)"), /*#__PURE__*/React.createElement("div", {
@@ -4322,7 +4431,9 @@ const CLAVES_RESPALDO = [
   'jopex_active_module',
   'jopex_ads',
   'jopex_backend_url',
-  'jopex_backend_key'
+  'jopex_backend_key',
+  'jopex_tasas_cuotas',
+  'jopex_tc_blue'
 ];
 
 // ---------------------------------------------------------------------------
@@ -4927,6 +5038,34 @@ function JopexPanel() {
         }
         .calc-out-highlight .calc-out-value { color: var(--lime); }
         .calc-out-danger .calc-out-value { color: var(--red-glow); }
+        .tc-bar {
+          display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+          background: var(--card-bg); border: 1px solid rgba(245, 166, 35, 0.35);
+          border-radius: 10px; padding: 10px 14px; margin-bottom: 18px;
+        }
+        .tc-value-box { width: auto; min-width: 90px; }
+        .tc-value-box input { font-family: 'Rajdhani', sans-serif; font-size: 16px; font-weight: 700; }
+        .tc-fuente { font-size: 11px; color: var(--text-secondary); }
+        .tasas-editor-toggle {
+          background: none; border: none; color: var(--blue-glow); font-size: 11px;
+          cursor: pointer; padding: 0; margin: -6px 0 10px; text-decoration: underline dotted;
+        }
+        .tasas-editor {
+          background: rgba(255,255,255,0.03); border: 1px dashed var(--border-soft);
+          border-radius: 8px; padding: 10px 12px; margin: -2px 0 12px;
+        }
+        .tasas-editor-row {
+          display: flex; align-items: center; justify-content: space-between; gap: 8px;
+          font-size: 12px; margin-bottom: 6px; color: var(--text-secondary);
+        }
+        .tasas-editor-row:last-child { margin-bottom: 0; }
+        .tasas-editor-row input {
+          width: 60px; background: rgba(255,255,255,0.04); border: 1px solid var(--border-soft);
+          border-radius: 5px; color: var(--text-primary); padding: 4px 6px; font-size: 12px;
+          font-family: 'Inter', sans-serif; text-align: right;
+        }
+        .tasas-editor-row input:focus { outline: none; border-color: var(--lime); }
+        .tasas-editor-hint { font-size: 10.5px; color: var(--text-secondary); margin: 6px 0 0; }
         @media (max-width: 900px) {
           .costo-card-body { grid-template-columns: 1fr; }
           .costo-block-output { border-left: none; padding-left: 0; border-top: 1px dashed var(--border-soft); padding-top: 12px; }
