@@ -15,7 +15,7 @@
 
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=Inter:wght@400;500;600&family=Archivo:wght@400;500;600;700;900&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
 
 <style>
   html, body { margin: 0; padding: 0; background: #070b14; }
@@ -5197,6 +5197,55 @@ function JopexPanel() {
           overflow-y: auto;
           padding: 28px 32px 60px;
         }
+        /* ---------------------------------------------------------------
+           Tienda Nube — único módulo con la identidad del manual de marca
+           (fondo Petróleo Alto + tipografía Archivo/IBM Plex Mono), para
+           que el usuario detecte de un vistazo en qué módulo está. El
+           manual restringe Petróleo Alto a "solo dentro del logo"; acá se
+           usa como fondo por pedido explícito del usuario, con texto
+           oscuro donde hace falta para que siga siendo legible.
+        --------------------------------------------------------------- */
+        .jopex-main-tiendanube {
+          background: #4F96BE;
+          font-family: 'Archivo', -apple-system, sans-serif;
+        }
+        .jopex-main-tiendanube .module-header h1,
+        .jopex-main-tiendanube .table-section-header h2 {
+          font-family: 'IBM Plex Mono', monospace;
+          color: #22303a;
+        }
+        .jopex-main-tiendanube .module-header p,
+        .jopex-main-tiendanube .sub-empty {
+          color: #22303a;
+          opacity: 0.85;
+        }
+        .jopex-main-tiendanube h4,
+        .jopex-main-tiendanube .calc-field-label,
+        .jopex-main-tiendanube .calc-out-label,
+        .jopex-main-tiendanube .tn-tasas-col h5,
+        .jopex-main-tiendanube .costo-card-title,
+        .jopex-main-tiendanube .cell-prefix {
+          font-family: 'IBM Plex Mono', monospace;
+          letter-spacing: 0.06em;
+        }
+        .jopex-main-tiendanube .calc-field-input input,
+        .jopex-main-tiendanube .calc-field-input select {
+          font-family: 'Archivo', sans-serif;
+        }
+        .jopex-main-tiendanube .tasas-editor-toggle {
+          color: #1F4962;
+        }
+        /* Las superficies translúcidas se pensaron para un fondo oscuro;
+           acá se opacan un poco más para que se despeguen del celeste. */
+        .jopex-main-tiendanube .costo-card {
+          background: rgba(20, 30, 48, 0.92);
+        }
+        .jopex-main-tiendanube .tasas-editor {
+          background: rgba(20, 30, 48, 0.35);
+        }
+        .jopex-main-tiendanube .tn-pasarela {
+          background: rgba(20, 30, 48, 0.55);
+        }
         .module-header h1 {
           font-family: 'Rajdhani', sans-serif;
           font-size: 28px;
@@ -6438,7 +6487,7 @@ function JopexPanel() {
         }, s.alerta ? /*#__PURE__*/React.createElement("span", { className: "punto-alerta" }) : null,
            /*#__PURE__*/React.createElement("span", { className: "nav-subitem-txt" }, s.label)))));
   }), /*#__PURE__*/React.createElement(RespaldoBloque, null)), /*#__PURE__*/React.createElement("main", {
-    className: "jopex-main"
+    className: "jopex-main" + (active === 'tiendanube' ? ' jopex-main-tiendanube' : '')
   }, /*#__PURE__*/React.createElement(ModulePanel, {
     moduleId: active,
     productos: productos,
