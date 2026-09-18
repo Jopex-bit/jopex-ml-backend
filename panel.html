@@ -999,13 +999,21 @@ function ProductoCostoCard({
     className: "costo-card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "costo-card-header"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "costo-card-titulos"
   }, /*#__PURE__*/React.createElement("input", {
     type: "text",
     className: "costo-card-title",
+    value: p.apodo || '',
+    onChange: e => onUpdate(p.id, 'apodo', e.target.value),
+    placeholder: p.nombre || "Nombre corto para identificarlo rápido"
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    className: "costo-card-subtitulo",
     value: p.nombre,
     onChange: e => onUpdate(p.id, 'nombre', e.target.value),
-    placeholder: "Nombre del producto"
-  }), /*#__PURE__*/React.createElement("button", {
+    placeholder: "Título real de la publicación"
+  })), /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "icon-btn",
     onClick: () => onRemove(p.id),
@@ -1254,6 +1262,7 @@ function CostosPanel({
     setProductos(prev => [...prev, {
       id: newId,
       nombre: '',
+      apodo: '',
       valorAdquisicion: '',
       envioML: '',
       cargoVenta: '',
@@ -1642,7 +1651,7 @@ function TarjetaTiendaNube({ tn, productos, onUpdate, onRemove, cfg }) {
           onChange: e => onUpdate(tn.id, 'productoId', e.target.value)
         },
           h('option', { value: '' }, '— Elegí un producto de Costos —'),
-          (productos || []).map(p => h('option', { key: p.id, value: p.id }, p.nombre || '(sin nombre)')))),
+          (productos || []).map(p => h('option', { key: p.id, value: p.id }, p.apodo || p.nombre || '(sin nombre)')))),
       h('button', {
         type: 'button', className: 'icon-btn', onClick: () => onRemove(tn.id),
         'aria-label': 'Eliminar'
@@ -3960,7 +3969,7 @@ function FichaAds({ p, pub, guardar, politica, stock }) {
   const hayRoas = roasTexto !== '' && !isNaN(roasNum) && roasNum > 0;
 
   const cabecera = /*#__PURE__*/React.createElement("div", { className: "costo-card-header" },
-    /*#__PURE__*/React.createElement("h3", { className: "costo-card-title" }, p.nombre || '(sin nombre)'));
+    /*#__PURE__*/React.createElement("h3", { className: "costo-card-title" }, p.apodo || p.nombre || '(sin nombre)'));
 
   if (!d) {
     return /*#__PURE__*/React.createElement("div", { className: "costo-card" }, cabecera,
@@ -5060,7 +5069,7 @@ function JopexPanel() {
   // Submenús del menú lateral
   const subCostos = productos.map(p => ({
     id: p.id,
-    label: (p.nombre || '(sin nombre)').slice(0, 34),
+    label: (p.apodo || p.nombre || '(sin nombre)').slice(0, 34),
     alerta: (() => { const r = calcularCosto(p); return r && !r.error && r.promo && r.promo.margenRealPromo < 0; })()
   }));
   const subStock = stockProductos.map(p => {
@@ -5297,6 +5306,7 @@ function JopexPanel() {
           padding-bottom: 10px;
           border-bottom: 1px solid var(--border-soft);
         }
+        .costo-card-titulos { flex: 1; min-width: 0; display: flex; flex-direction: column; }
         .costo-card-title {
           background: transparent;
           border: none;
@@ -5305,9 +5315,19 @@ function JopexPanel() {
           font-size: 18px;
           font-weight: 700;
           width: 100%;
-          padding: 4px 2px;
+          padding: 4px 2px 0;
         }
         .costo-card-title:focus { outline: none; border-bottom: 1px solid var(--lime); }
+        .costo-card-subtitulo {
+          background: transparent;
+          border: none;
+          color: var(--text-secondary);
+          font-size: 11px;
+          width: 100%;
+          padding: 0 2px 2px;
+          text-overflow: ellipsis;
+        }
+        .costo-card-subtitulo:focus { outline: none; color: var(--text-primary); }
         .costo-card-body {
           display: grid;
           grid-template-columns: 1fr 1fr 1.2fr;
