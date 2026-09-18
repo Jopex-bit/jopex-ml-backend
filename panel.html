@@ -4142,7 +4142,7 @@ function metricasDerivadas(m) {
   };
 }
 
-function CampanaCard({ c, productos, detalle }) {
+function CampanaCard({ c, productos, detalle, onVerDetalle }) {
   const d = metricasDerivadas(c.metricas);
 
   // Cruce con Costos: el piso de cada publicación de la campaña.
@@ -4244,6 +4244,9 @@ function CampanaCard({ c, productos, detalle }) {
       /*#__PURE__*/React.createElement("span", {
         className: "chip" + (String(c.estado) === 'active' ? ' ok' : '')
       }, c.estado === 'active' ? 'activa' : (c.estado || 's/d'))),
+    !detalle && onVerDetalle && /*#__PURE__*/React.createElement("button", {
+      type: "button", className: "ver-detalle-btn", onClick: () => onVerDetalle(c.id)
+    }, "Ver detalle y Controles semanales →"),
     /*#__PURE__*/React.createElement("div", { className: "sync-linea" },
       (c.estrategia ? 'Estrategia: ' + (ESTRATEGIAS_ML[c.estrategia] || c.estrategia) + ' · ' : '') +
       (c.presupuesto_diario != null ? 'Presupuesto diario: ' + money(c.presupuesto_diario) + ' · ' : '') +
@@ -4564,7 +4567,7 @@ function BarraSyncAds({ cfg, setCfg }) {
         : "") + " · hora argentina"));
 }
 
-function CampanasML({ cfg, setCfg, productos }) {
+function CampanasML({ cfg, setCfg, productos, elegir }) {
   const sync = cfg.sync || null;
   return /*#__PURE__*/React.createElement("div", { className: "table-section" },
     /*#__PURE__*/React.createElement("div", { className: "table-section-header" },
@@ -4582,10 +4585,12 @@ function CampanasML({ cfg, setCfg, productos }) {
       (sync.campanas || []).length === 0
         ? /*#__PURE__*/React.createElement("p", { className: "sync-aviso" }, "La cuenta no tiene campañas creadas en Mercado Ads.")
         : (sync.campanas || []).map(c => /*#__PURE__*/React.createElement(CampanaCard, {
-            key: c.id, c: c, productos: productos }))));
+            key: c.id, c: c, productos: productos,
+            onVerDetalle: elegir ? (id) => elegir('ads', 'c' + id) : null
+          }))));
 }
 
-function AdsPanel({ productos, stockProductos, cfg, setCfg, seleccion }) {
+function AdsPanel({ productos, stockProductos, cfg, setCfg, seleccion, elegir }) {
   const politica = Object.assign({}, POLITICA_DEFECTO, cfg.politica || {});
   const pubs = cfg.pubs || {};
 
@@ -4649,7 +4654,7 @@ function AdsPanel({ productos, stockProductos, cfg, setCfg, seleccion }) {
       /*#__PURE__*/React.createElement("p", null, MODULE_DESC.ads)),
     bloquePolitica,
     /*#__PURE__*/React.createElement(CampanasML, {
-      cfg: cfg, setCfg: setCfg, productos: productos }),
+      cfg: cfg, setCfg: setCfg, productos: productos, elegir: elegir }),
     /*#__PURE__*/React.createElement("div", { className: "table-section-header" },
       /*#__PURE__*/React.createElement("h2", null, "Publicaciones")),
     productos.length === 0
@@ -4708,7 +4713,8 @@ function ModulePanel({
     stockProductos: stockProductos,
     cfg: adsCfg,
     setCfg: setAdsCfg,
-    seleccion: sel.ads
+    seleccion: sel.ads,
+    elegir: elegir
   });
   if (moduleId === 'tiendanube') return /*#__PURE__*/React.createElement(TiendaNubePanel, {
     productos: productos
@@ -5450,6 +5456,12 @@ function JopexPanel() {
         .sku-ok { font-size: 11px; color: var(--lime); }
         .sku-error { font-size: 11px; color: var(--red-glow); }
         .sku-sin-vincular { font-size: 11.5px; color: var(--text-secondary); font-style: italic; }
+        .ver-detalle-btn {
+          display: inline-block; background: rgba(61, 220, 60, 0.08); border: 1px solid rgba(61, 220, 60, 0.35);
+          color: var(--lime); font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: 7px;
+          cursor: pointer; margin: -4px 0 12px;
+        }
+        .ver-detalle-btn:hover { background: rgba(61, 220, 60, 0.16); }
         .tn-producto-select { width: 100%; margin-right: 10px; }
         .tn-producto-select select { width: 100%; }
         .tn-costo-margen {
