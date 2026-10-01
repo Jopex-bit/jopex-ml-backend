@@ -428,6 +428,19 @@ const Plus = props => /*#__PURE__*/React.createElement(Icon, props, /*#__PURE__*
   x2: "19",
   y2: "12"
 }));
+const Calculator = props => /*#__PURE__*/React.createElement(Icon, props, /*#__PURE__*/React.createElement("rect", {
+  x: "4", y: "2", width: "16", height: "20", rx: "2"
+}), /*#__PURE__*/React.createElement("line", {
+  x1: "8", y1: "6", x2: "16", y2: "6"
+}), /*#__PURE__*/React.createElement("line", {
+  x1: "16", y1: "14", x2: "16", y2: "18"
+}), /*#__PURE__*/React.createElement("path", { d: "M16 10h.01" }),
+   /*#__PURE__*/React.createElement("path", { d: "M12 10h.01" }),
+   /*#__PURE__*/React.createElement("path", { d: "M8 10h.01" }),
+   /*#__PURE__*/React.createElement("path", { d: "M12 14h.01" }),
+   /*#__PURE__*/React.createElement("path", { d: "M8 14h.01" }),
+   /*#__PURE__*/React.createElement("path", { d: "M12 18h.01" }),
+   /*#__PURE__*/React.createElement("path", { d: "M8 18h.01" }));
 const Trash2 = props => /*#__PURE__*/React.createElement(Icon, props, /*#__PURE__*/React.createElement("polyline", {
   points: "3 6 5 6 21 6"
 }), /*#__PURE__*/React.createElement("path", {
@@ -481,6 +494,10 @@ const MODULES = [{
   id: 'tiendanube',
   label: 'Tienda Nube',
   icon: CreditCard
+}, {
+  id: 'calculadora',
+  label: 'Calculadora de Costo Rápido',
+  icon: Calculator
 }];
 
 // Columnas editables por módulo genérico (Ads, Investigación — el resto tiene
@@ -498,7 +515,8 @@ const MODULE_DESC = {
   evolucion: 'Flujo de caja neto mensual de toda la tienda, replicando la hoja FLUJO: Subtotal, Utilidad Bruta y Resultado Neto calculados mes a mes.',
   investigacion: 'Cotizaciones de proveedores por producto candidato: landed cost estimado antes de comprar, comparando varias ofertas a la vez.',
   stock: 'Modelo Min-Max con cobertura: D, L, SS, Mínimo y Máximo calculados de tu historial real de ventas y envíos. Alerta cuando el Total Disponible cae debajo del Mínimo.',
-  tiendanube: 'Precio sugerido y margen real por producto en tu tienda Tiendanube, según la pasarela de pago (Pago Nube o Mercado Pago). El costo del producto sale de Costos.'
+  tiendanube: 'Precio sugerido y margen real por producto en tu tienda Tiendanube, según la pasarela de pago (Pago Nube o Mercado Pago). El costo del producto sale de Costos.',
+  calculadora: 'Costo landed estimado de un producto, al toque — misma cascada que Investigación (Seguro, Derecho, Tasa Estadística, IVA), con el tipo de cambio USDT de Belo. Independiente: no se guarda ni se manda a ningún otro módulo.'
 };
 
 // ---------- Evolución: replica la cascada real de la hoja FLUJO del usuario ----------
@@ -858,7 +876,8 @@ function calcularCosto(p, tasasCuotas) {
   const envio = Number(p.envioML);
   const cargo = Number(p.cargoVenta);
   const cuotas = p.cuotas || '6';
-  const fin = Number((tasasCuotas || TASAS_CUOTAS_DEFAULT)[cuotas]);
+  // 'sin' = vender en 1 pago, sin ofrecer cuotas: no hay cargo de financiamiento.
+  const fin = cuotas === 'sin' ? 0 : Number((tasasCuotas || TASAS_CUOTAS_DEFAULT)[cuotas]);
   const mg = Number(p.mgUtilidad);
   if (!valorAdq || isNaN(valorAdq) || isNaN(envio) || isNaN(cargo) || isNaN(fin) || !mg || isNaN(mg)) {
     return null;
@@ -1065,6 +1084,7 @@ function ProductoCostoCard({
         value: p.cuotas || '6',
         onChange: e => onUpdate(p.id, 'cuotas', e.target.value)
       },
+        /*#__PURE__*/React.createElement("option", { value: "sin" }, "Sin cuotas (1 pago)"),
         Object.keys(tasasCuotas || TASAS_CUOTAS_DEFAULT).map(c =>
           /*#__PURE__*/React.createElement("option", { key: c, value: c }, c + ' cuotas'))))),
   /*#__PURE__*/React.createElement("button", {
@@ -4675,6 +4695,153 @@ function AdsPanel({ productos, stockProductos, cfg, setCfg, seleccion, elegir })
           })));
 }
 
+// ---------- Calculadora de Costo Rápido ----------
+// Módulo standalone: misma cascada de landed cost que Investigación
+// (calcularCotizacion, un solo renglón), pero sin cotización formal — no se
+// guarda historial, no se vincula a ningún producto ni se manda a Costos.
+// Pensada para estimar en el momento el costo de un producto candidato
+// mientras se investiga, antes de cargarlo como cotización.
+// El tipo de cambio es el USDT de Belo (vía API pública de criptoya.com,
+// precio "ask" — lo que cuesta comprar USDT), con override manual.
+function calcRapidaVacio() {
+  return {
+    cantidad: '',
+    valorUsd: '',
+    valorUnitUsd: '',
+    tasaDie: '',
+    envioUsd: '',
+    comisionAlibabaUsd: ''
+  };
+}
+
+function CalculadoraRapidaPanel() {
+  const h = React.createElement;
+
+  const [f, setF] = useState(() => {
+    try {
+      const s = window.localStorage.getItem('jopex_calc_rapida');
+      return s ? { ...calcRapidaVacio(), ...JSON.parse(s) } : calcRapidaVacio();
+    } catch (e) { return calcRapidaVacio(); }
+  });
+  React.useEffect(() => {
+    try { window.localStorage.setItem('jopex_calc_rapida', JSON.stringify(f)); } catch (e) {}
+  }, [f]);
+
+  // ---------- Tipo de cambio: USDT Belo ----------
+  const [tc, setTcState] = useState(() => {
+    try {
+      const s = window.localStorage.getItem('jopex_tc_belo');
+      return s ? JSON.parse(s).valor : null;
+    } catch (e) { return null; }
+  });
+  const [tcFuente, setTcFuente] = useState(() => {
+    try {
+      const s = window.localStorage.getItem('jopex_tc_belo');
+      return s ? JSON.parse(s).actualizado : '';
+    } catch (e) { return ''; }
+  });
+  const [tcError, setTcError] = useState('');
+  const guardarTc = (valor, actualizado) => {
+    setTcState(valor);
+    setTcFuente(actualizado);
+    try { window.localStorage.setItem('jopex_tc_belo', JSON.stringify({ valor, actualizado })); } catch (e) {}
+  };
+  const refrescarTc = async () => {
+    setTcError('');
+    try {
+      const resp = await fetch('https://criptoya.com/api/usdt/ars/1');
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      const ask = data && data.belo && data.belo.ask;
+      if (!ask) throw new Error('La respuesta no trajo la cotización de Belo.');
+      guardarTc(ask, new Date().toLocaleString('es-AR'));
+    } catch (e) {
+      setTcError('No se pudo traer la cotización de Belo automática (' + e.message + '). Cargala a mano abajo.');
+    }
+  };
+  React.useEffect(() => {
+    if (tc == null) refrescarTc();
+    // eslint-disable-next-line
+  }, []);
+
+  // Cantidad, total del lote y precio unitario se mantienen sincronizados:
+  // completás uno y el otro se calcula solo (misma lógica que en Investigación).
+  const set = (campo, valor) => setF(prev => {
+    const n = v => v === '' || v == null || isNaN(v) ? NaN : Number(v);
+    const red = x => Math.round(x * 10000) / 10000;
+    let x = { ...prev, [campo]: valor };
+    const cant = n(campo === 'cantidad' ? valor : x.cantidad);
+    if (campo === 'valorUnitUsd') {
+      const u = n(valor);
+      x.valorUsd = !isNaN(u) && !isNaN(cant) ? red(u * cant) : (valor === '' ? '' : x.valorUsd);
+    } else if (campo === 'valorUsd') {
+      const t = n(valor);
+      x.valorUnitUsd = !isNaN(t) && !isNaN(cant) && cant > 0 ? red(t / cant) : (valor === '' ? '' : x.valorUnitUsd);
+    } else if (campo === 'cantidad') {
+      const u = n(x.valorUnitUsd), t = n(x.valorUsd);
+      if (!isNaN(u) && !isNaN(cant)) x.valorUsd = red(u * cant);
+      else if (!isNaN(t) && !isNaN(cant) && cant > 0) x.valorUnitUsd = red(t / cant);
+    }
+    return x;
+  });
+  const limpiar = () => setF(calcRapidaVacio());
+
+  const r = calcularCotizacion({
+    lineas: [{ valorUsd: f.valorUsd, tasaDie: f.tasaDie, cantidad: f.cantidad }],
+    envioUsd: f.envioUsd,
+    comisionAlibabaUsd: f.comisionAlibabaUsd,
+    tc: tc
+  });
+
+  return h('div', { className: 'module-panel' },
+    h('div', { className: 'module-header' },
+      h('h1', null, 'Calculadora de Costo Rápido'),
+      h('p', null, MODULE_DESC.calculadora)),
+
+    h('div', { className: 'tc-bar' },
+      h('span', { className: 'calc-field-label' }, 'Tipo de cambio — USDT Belo'),
+      h('div', { className: 'calc-field-input tc-value-box' },
+        h('span', { className: 'cell-prefix' }, '$'),
+        h('input', {
+          type: 'number', value: tc == null ? '' : tc, placeholder: '—',
+          onChange: e => guardarTc(e.target.value === '' ? null : Number(e.target.value), 'cargado a mano')
+        })),
+      h('button', { type: 'button', className: 'add-btn', onClick: refrescarTc }, '⟳ Refrescar'),
+      h('span', { className: 'tc-fuente' },
+        tcError || (tcFuente ? 'Última actualización: ' + tcFuente + ' (criptoya.com, Belo — compra).' : 'Todavía no se cargó el TC.'))),
+
+    h('div', { className: 'data-note' },
+      'Misma cascada que Investigación (Seguro 1%, Derecho por % Tasa DIE, Tasa Estadística 3%, IVA 21%), pero suelta: para estimar rápido el costo landed de un producto candidato. No se guarda como cotización ni se manda a Costos.'),
+
+    h('div', { className: 'cotiz-fields-grid' },
+      h(CampoInput, { label: 'Cantidad', value: f.cantidad, onChange: v => set('cantidad', v) }),
+      h(CampoInput, { label: 'US$ total del lote', prefix: 'US$', value: f.valorUsd, onChange: v => set('valorUsd', v) }),
+      h(CampoInput, { label: 'US$ por unidad', prefix: 'US$', value: f.valorUnitUsd, onChange: v => set('valorUnitUsd', v) }),
+      h(CampoInput, { label: '% Tasa DIE (derecho de importación)', prefix: '%', value: f.tasaDie, onChange: v => set('tasaDie', v) }),
+      h(CampoInput, { label: 'Envío total', prefix: 'US$', value: f.envioUsd, onChange: v => set('envioUsd', v) }),
+      h(CampoInput, { label: 'Comisión Alibaba', prefix: 'US$', value: f.comisionAlibabaUsd, onChange: v => set('comisionAlibabaUsd', v) })),
+
+    h('div', { className: 'lineas-head' },
+      h('span'),
+      h('button', { type: 'button', className: 'add-btn ghost-btn', onClick: limpiar }, 'Limpiar')),
+
+    !r && h('div', { className: 'sub-empty' },
+      'Completá Cantidad, valor (total o por unidad), % Tasa DIE y Envío, y asegurate de tener el tipo de cambio cargado arriba, para calcular.'),
+
+    r && h('div', { className: 'cotiz-resultado' },
+      h('div', { className: 'costo-out-grid' },
+        h(CampoCalculado, { label: 'Seguro (1%)', value: moneyUsd(r.seguro) }),
+        h(CampoCalculado, { label: 'Base CIF', value: moneyUsd(r.cifTotal) }),
+        h(CampoCalculado, { label: 'Derechos', value: moneyUsd(r.derecho) }),
+        h(CampoCalculado, { label: 'Tasa Estadística', value: moneyUsd(r.estadistica) }),
+        h(CampoCalculado, { label: 'IVA', value: moneyUsd(r.iva) }),
+        h(CampoCalculado, { label: 'Total USD', value: moneyUsd(r.totalUsd), highlight: true }),
+        h(CampoCalculado, { label: 'Unitario USD', value: moneyUsd(r.precioUnitUsd), highlight: true }),
+        h(CampoCalculado, { label: 'Unidades', value: String(r.unidades) })),
+      h('div', { className: 'precio-hero cotiz-precio-landed' },
+        money(r.precioLandedArs), ' ', h('span', null, '/ unidad landed'))));
+}
+
 function ModulePanel({
   moduleId,
   productos,
@@ -4719,6 +4886,7 @@ function ModulePanel({
   if (moduleId === 'tiendanube') return /*#__PURE__*/React.createElement(TiendaNubePanel, {
     productos: productos
   });
+  if (moduleId === 'calculadora') return /*#__PURE__*/React.createElement(CalculadoraRapidaPanel, null);
   return /*#__PURE__*/React.createElement(GenericModulePanel, {
     moduleId: moduleId
   });
@@ -4744,7 +4912,9 @@ const CLAVES_RESPALDO = [
   'jopex_tasas_cuotas',
   'jopex_tc_blue',
   'jopex_tiendanube_items',
-  'jopex_tiendanube_cfg'
+  'jopex_tiendanube_cfg',
+  'jopex_calc_rapida',
+  'jopex_tc_belo'
 ];
 
 // ---------------------------------------------------------------------------
