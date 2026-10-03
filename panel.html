@@ -1856,6 +1856,7 @@ function cotizacionVacia() {
     tc: '',
     tcFecha: '',
     // Costo definitivo del lote (se completa al nacionalizar)
+    defFechaPago: '',
     defTcPago: '',
     defNacionalizacionArs: '',
     defTcCourier: '',
@@ -2247,6 +2248,7 @@ function CotizacionRow({
             h('div', { className: 'calc-field-input calc-readonly' },
               h('span', { className: 'cell-prefix' }, 'US$'),
               h('input', { type: 'text', value: r.pagoProveedorUsd.toFixed(2), readOnly: true }))),
+          campoDef('Fecha de pago (link Alibaba)', 'defFechaPago', null, 'date'),
           campoDef('TC del pago', 'defTcPago', '$'),
           campoDef('Nacionalización (courier)', 'defNacionalizacionArs', '$'),
           campoDef('TC informado por el courier', 'defTcCourier', '$'),
@@ -3123,12 +3125,141 @@ function ResumenStockRow({
     className: "stock-resumen-dato"
   }, "faltan datos"));
 }
+
+// ---------- Stock: seguimiento de cada envío (courier, tracking, envío compartido) ----------
+// Los campos de seguimiento son opcionales: los envíos ya guardados no los tienen y siguen
+// funcionando igual. Un envío "compartido" no cambia el modelo: cada producto conserva su propia
+// fila (con su cantidad) y las filas de la misma caja comparten un grupo (grupoIntl / grupoFull);
+// al editar un campo común en una fila, se replica en las demás del grupo.
+const ENVIO_GRUPO_INTL = ['courierIntl', 'trackingIntl', 'fechaPago', 'fechaDespachoOrigen', 'fechaLlegadaAduana', 'fechaLlegadaDeposito'];
+const ENVIO_GRUPO_FULL = ['courierFull', 'trackingFull', 'gestionFull', 'fechaDespachoFull', 'fechaLlegadaFull'];
+const COURIERS_INTL = ['DHL', 'UPS', 'Otro'];
+function urlSeguimiento(courier, numero) {
+  const t = encodeURIComponent((numero || '').trim());
+  if (!t) return '';
+  if (courier === 'DHL') return 'https://www.dhl.com/global-en/home/tracking/tracking-express.html?submit=1&tracking-id=' + t;
+  if (courier === 'UPS') return 'https://www.ups.com/track?loc=es_AR&tracknum=' + t;
+  return '';
+}
+function envioVacio() {
+  return {
+    id: `e${Date.now()}${Math.random().toString(36).slice(2, 5)}`,
+    unidadesFull: '', fechaPago: '', fechaDespachoOrigen: '', fechaLlegadaAduana: '',
+    fechaLlegadaDeposito: '', vendePorFull: false, fechaDespachoFull: '', fechaLlegadaFull: '', cantidad: ''
+  };
+}
+
+function EnvioDetalle({ p, e, todos, cotizaciones, onUpdate, onLink }) {
+  const h = React.createElement;
+  const [cotSel, setCotSel] = useState(e.cotizacionId || '');
+  const [aviso, setAviso] = useState('');
+  const otros = todos.filter(x => x.id !== p.id);
+  const cotOrdenadas = [...(cotizaciones || [])].sort((a, b) =>
+    (b.destinoMl === p.mlItemId ? 1 : 0) - (a.destinoMl === p.mlItemId ? 1 : 0));
+
+  const traerDeCotizacion = () => {
+    const c = (cotizaciones || []).find(x => x.id === cotSel);
+    if (!c) { setAviso('Elegí primero una cotización.'); return; }
+    if (!c.defFechaPago) {
+      setAviso('Esa cotización no tiene fecha de pago. Cargala en Investigación, en Costo definitivo.');
+      return;
+    }
+    onUpdate('cotizacionId', cotSel);
+    onUpdate('fechaPago', c.defFechaPago);
+    if (!e.cantidad && c.defUnidades) onUpdate('cantidad', c.defUnidades);
+    setAviso('Fecha de pago cargada desde la cotización.');
+  };
+
+  const selectorCompartir = (leg) => {
+    const gKey = leg === 'full' ? 'grupoFull' : 'grupoIntl';
+    const miembros = e[gKey] ? otros.flatMap(x => x.envios.filter(y => y[gKey] === e[gKey]).map(y => ({ prod: x, env: y }))) : [];
+    return h('div', { className: 'envio-compartir' },
+      h('div', { className: 'calc-field-label' }, leg === 'full'
+        ? 'Va en la misma caja a FULL con otros productos (elegí el envío de cada uno)'
+        : 'Viene en la misma caja con otros productos'),
+      miembros.length > 0 && h('div', { className: 'envio-miembros' },
+        'Compartido con: ' + miembros.map(m => (m.prod.nombre || '').slice(0, 28) + ' (' + (m.env.cantidad || '?') + ' u.)').join(' · ')),
+      otros.map(o => {
+        const actual = (o.envios.find(y => e[gKey] && y[gKey] === e[gKey]) || {}).id || '';
+        return h('label', { key: o.id, className: 'envio-compartir-fila' },
+          h('span', null, (o.nombre || '').slice(0, 44)),
+          h('select', {
+            value: actual,
+            onChange: ev => onLink(leg, o.id, ev.target.value)
+          },
+            h('option', { value: '' }, 'No'),
+            leg !== 'full' && h('option', { value: 'nuevo' }, 'Sí: crear envío nuevo'),
+            o.envios.map(y => h('option', { key: y.id, value: y.id },
+              'Sí: envío de ' + (y.cantidad || '?') + ' u. · pago ' + (y.fechaPago || 's/f')))));
+      }));
+  };
+
+  const campoTexto = (label, field, placeholder) => h('label', { className: 'cotiz-field' },
+    h('span', { className: 'calc-field-label' }, label),
+    h('div', { className: 'calc-field-input' },
+      h('input', { type: 'text', value: e[field] || '', placeholder: placeholder || '—', onChange: ev => onUpdate(field, ev.target.value) })));
+
+  const courierIntl = e.courierIntl || '';
+  const urlIntl = urlSeguimiento(courierIntl, e.trackingIntl);
+  const courierFull = e.courierFull || 'Andreani';
+
+  return h('div', { className: 'envio-detalle' },
+    h('div', { className: 'envio-detalle-bloque' },
+      h('h4', null, 'Pago al proveedor'),
+      h('div', { className: 'cotiz-fields-grid' },
+        h('label', { className: 'cotiz-field' },
+          h('span', { className: 'calc-field-label' }, 'Cotización de Investigación'),
+          h('div', { className: 'calc-field-input' },
+            h('select', { value: cotSel, onChange: ev => { setCotSel(ev.target.value); setAviso(''); } },
+              h('option', { value: '' }, '— elegir —'),
+              cotOrdenadas.map(c => h('option', { key: c.id, value: c.id },
+                (c.destinoMl === p.mlItemId ? '★ ' : '') + (c.producto || 'Sin nombre').slice(0, 30) + ' · ' + (c.proveedor || 's/proveedor') + ' · pago ' + (c.defFechaPago || 's/f')))))),
+        h('div', { className: 'cotiz-field' },
+          h('span', { className: 'calc-field-label' }, ' '),
+          h('button', { type: 'button', className: 'add-btn', onClick: traerDeCotizacion }, 'Traer fecha de pago'))),
+      aviso && h('div', { className: 'data-note', style: { marginTop: 6, marginBottom: 0 } }, aviso)),
+
+    h('div', { className: 'envio-detalle-bloque' },
+      h('h4', null, 'Tramo internacional'),
+      h('div', { className: 'cotiz-fields-grid' },
+        h('label', { className: 'cotiz-field' },
+          h('span', { className: 'calc-field-label' }, 'Courier'),
+          h('div', { className: 'calc-field-input' },
+            h('select', { value: courierIntl, onChange: ev => onUpdate('courierIntl', ev.target.value) },
+              h('option', { value: '' }, '— elegir —'),
+              COURIERS_INTL.map(c => h('option', { key: c, value: c }, c))))),
+        campoTexto('Número de tracking', 'trackingIntl', 'ej: 1234567890'),
+        h('div', { className: 'cotiz-field' },
+          h('span', { className: 'calc-field-label' }, ' '),
+          urlIntl
+            ? h('a', { href: urlIntl, target: '_blank', rel: 'noreferrer', className: 'link-btn' }, 'Ver seguimiento en ' + courierIntl)
+            : h('span', { className: 'muted' }, courierIntl === 'Otro' ? 'Sin link para este courier' : 'Elegí courier y tracking'))),
+      selectorCompartir('intl')),
+
+    e.vendePorFull && h('div', { className: 'envio-detalle-bloque' },
+      h('h4', null, 'Tramo a FULL (Mercado Libre)'),
+      h('div', { className: 'cotiz-fields-grid' },
+        h('label', { className: 'cotiz-field' },
+          h('span', { className: 'calc-field-label' }, 'Empresa'),
+          h('div', { className: 'calc-field-input' },
+            h('input', { type: 'text', value: e.courierFull == null ? 'Andreani' : e.courierFull, onChange: ev => onUpdate('courierFull', ev.target.value) }))),
+        campoTexto('Número de seguimiento', 'trackingFull', 'ej: 360000123456'),
+        campoTexto('N° de gestión de envío a FULL (ML)', 'gestionFull', 'ej: 1234567'),
+        h('div', { className: 'cotiz-field' },
+          h('span', { className: 'calc-field-label' }, ' '),
+          courierFull.trim().toLowerCase() === 'andreani'
+            ? h('a', { href: 'https://www.andreani.com/', target: '_blank', rel: 'noreferrer', className: 'link-btn' }, 'Abrir Andreani (entrás con tu cuenta)')
+            : null)),
+      selectorCompartir('full')));
+}
 function StockPanel({
   productosCostos,
   productos,
   setProductos,
-  seleccion
+  seleccion,
+  cotizaciones
 }) {
+  const [envioAbierto, setEnvioAbierto] = useState(null);
   const [selInterno, setSelInterno] = useState(STOCK_PRODUCTOS_INICIAL[0]?.id || null);
   // La selección del menú lateral manda; si no hay, vale la interna.
   // Al elegir en el menú, el detalle se abre solo (no hay que hacer un segundo clic).
@@ -3278,13 +3409,40 @@ function StockPanel({
     }));
   };
   const updateEnvio = (prodId, envioId, field, value) => {
-    setProductos(prev => prev.map(p => p.id !== prodId ? p : {
-      ...p,
-      envios: p.envios.map(e => e.id === envioId ? {
-        ...e,
-        [field]: value
-      } : e)
-    }));
+    setProductos(prev => {
+      const prod = prev.find(p => p.id === prodId);
+      const src = prod && prod.envios.find(e => e.id === envioId);
+      const gI = src && src.grupoIntl && ENVIO_GRUPO_INTL.includes(field) ? src.grupoIntl : null;
+      const gF = src && src.grupoFull && ENVIO_GRUPO_FULL.includes(field) ? src.grupoFull : null;
+      const toca = (p, e) => (p.id === prodId && e.id === envioId) || (gI && e.grupoIntl === gI) || (gF && e.grupoFull === gF);
+      return prev.map(p => p.envios.some(e => toca(p, e))
+        ? { ...p, envios: p.envios.map(e => toca(p, e) ? { ...e, [field]: value } : e) }
+        : p);
+    });
+  };
+  // Vincula (o desvincula) el envío de otro producto a la misma caja que este envío.
+  // destino: '' = quitar, 'nuevo' = crear envío en ese producto, o el id de un envío existente.
+  const linkEnvio = (prodId, envioId, leg, destProdId, destino) => {
+    const campos = leg === 'full' ? ENVIO_GRUPO_FULL : ENVIO_GRUPO_INTL;
+    const gKey = leg === 'full' ? 'grupoFull' : 'grupoIntl';
+    setProductos(prev => {
+      const prod = prev.find(p => p.id === prodId);
+      const src = prod && prod.envios.find(e => e.id === envioId);
+      if (!src) return prev;
+      const grupo = src[gKey] || `g${Date.now()}`;
+      const copiar = {};
+      campos.forEach(k => { if (src[k] !== '' && src[k] != null) copiar[k] = src[k]; });
+      return prev.map(p => {
+        let envios = p.envios;
+        if (p.id === prodId && !src[gKey]) envios = envios.map(e => e.id === envioId ? { ...e, [gKey]: grupo } : e);
+        if (p.id === destProdId) {
+          envios = envios.map(e => e[gKey] === grupo ? { ...e, [gKey]: '' } : e);
+          if (destino === 'nuevo') envios = [...envios, { ...envioVacio(), ...copiar, [gKey]: grupo }];
+          else if (destino) envios = envios.map(e => e.id === destino ? { ...e, ...copiar, [gKey]: grupo } : e);
+        }
+        return envios === p.envios ? p : { ...p, envios };
+      });
+    });
   };
   const addEnvio = prodId => {
     setProductos(prev => prev.map(p => p.id !== prodId ? p : {
@@ -3520,7 +3678,7 @@ function StockPanel({
   }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Cantidad"), /*#__PURE__*/React.createElement("th", null, "Fecha pago"), /*#__PURE__*/React.createElement("th", null, "Desp. origen"), /*#__PURE__*/React.createElement("th", null, "Llegada Aduana"), /*#__PURE__*/React.createElement("th", null, "Llegada depósito JOPEX"), /*#__PURE__*/React.createElement("th", null, "¿Vende por FULL?"), /*#__PURE__*/React.createElement("th", null, "Desp. a FULL"), /*#__PURE__*/React.createElement("th", null, "Unid. a FULL"), /*#__PURE__*/React.createElement("th", null, "Llegada a FULL"), /*#__PURE__*/React.createElement("th", null, "Lead time (días)"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, seleccionado.envios.map(e => {
     const disponible = fechaDisponibleEnvio(e);
     const lt = diasEntreFechas(e.fechaPago, disponible);
-    return /*#__PURE__*/React.createElement("tr", {
+    const filaEnvio = /*#__PURE__*/React.createElement("tr", {
       key: e.id
     }, /*#__PURE__*/React.createElement("td", {
       className: "editable-cell"
@@ -3590,10 +3748,28 @@ function StockPanel({
       className: "row-actions"
     }, /*#__PURE__*/React.createElement("button", {
       type: "button",
+      className: "link-btn",
+      onClick: () => setEnvioAbierto(envioAbierto === e.id ? null : e.id)
+    }, (e.trackingIntl || e.trackingFull ? "Seguimiento ✓" : "Seguimiento")), /*#__PURE__*/React.createElement("button", {
+      type: "button",
       className: "icon-btn",
       onClick: () => removeEnvio(seleccionado.id, e.id)
     }, /*#__PURE__*/React.createElement(Trash2, {
       size: 14
+    }))));
+    return /*#__PURE__*/React.createElement(React.Fragment, {
+      key: e.id
+    }, filaEnvio, envioAbierto === e.id && /*#__PURE__*/React.createElement("tr", {
+      className: "envio-detalle-fila"
+    }, /*#__PURE__*/React.createElement("td", {
+      colSpan: 11
+    }, /*#__PURE__*/React.createElement(EnvioDetalle, {
+      p: seleccionado,
+      e: e,
+      todos: productos,
+      cotizaciones: cotizaciones,
+      onUpdate: (campo, valor) => updateEnvio(seleccionado.id, e.id, campo, valor),
+      onLink: (leg, destProdId, destino) => linkEnvio(seleccionado.id, e.id, leg, destProdId, destino)
     }))));
   })))), /*#__PURE__*/React.createElement("div", {
     className: "sub-empty",
@@ -5036,7 +5212,8 @@ function ModulePanel({
     productosCostos: productos,
     productos: stockProductos,
     setProductos: setStockProductos,
-    seleccion: sel.stock
+    seleccion: sel.stock,
+    cotizaciones: cotizaciones
   });
   if (moduleId === 'ads') return /*#__PURE__*/React.createElement(AdsPanel, {
     productos: productos,
@@ -6143,6 +6320,13 @@ function JopexPanel() {
           font-family: 'Inter', sans-serif;
         }
         .stock-envios-table input:disabled { opacity: 0.3; }
+        .envio-detalle-fila td { background: rgba(255,255,255,0.02); padding: 12px 14px; }
+        .envio-detalle { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+        .envio-detalle-bloque h4 { margin: 0 0 8px; font-size: 12.5px; color: var(--blue-glow); }
+        .envio-detalle select, .envio-detalle input[type="text"] { width: 100%; }
+        .envio-compartir { margin-top: 10px; }
+        .envio-miembros { font-size: 11.5px; color: var(--text-secondary); margin: 4px 0; }
+        .envio-compartir-fila { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(160px, 1fr); gap: 8px; align-items: center; margin-top: 4px; font-size: 12px; }
         .kpi-row {
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
