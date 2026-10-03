@@ -983,7 +983,7 @@ function ProductoCostoCard({
   onRemove,
   tasasCuotas,
   onUpdateTasa,
-  tcBlue
+  tcBelo
 }) {
   const [editandoTasas, setEditandoTasas] = useState(false);
   const [guardandoSku, setGuardandoSku] = useState(false);
@@ -1165,9 +1165,32 @@ function ProductoCostoCard({
     highlight: true
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Margen real (USD)",
-    value: tcBlue ? moneyUsd(r.reciboPorVenta / tcBlue) : '— (cargá el TC arriba)',
-    highlight: !!tcBlue
-  }))))), /*#__PURE__*/React.createElement("div", {
+    value: tcBelo ? moneyUsd(r.reciboPorVenta / tcBelo) : '— (cargá el TC arriba)',
+    highlight: !!tcBelo
+  }))))), r && !r.error && (() => {
+    const h = React.createElement;
+    const u = Number(p.unidadesProyectadas);
+    const hayU = p.unidadesProyectadas !== '' && p.unidadesProyectadas != null && !isNaN(u) && u > 0;
+    const unitUsd = tcBelo ? r.reciboPorVenta / tcBelo : null;
+    const unitUsdPromo = tcBelo && r.promo ? r.promo.gananciaNetaPromo / tcBelo : null;
+    return h("div", { className: "promo-block proyeccion-block" },
+      h("h4", null, "Proyección de ventas"),
+      h("div", { className: "promo-fields" },
+        h(CampoInput, {
+          label: "Unidades proyectadas",
+          value: p.unidadesProyectadas || '',
+          onChange: v => onUpdate(p.id, 'unidadesProyectadas', v)
+        })),
+      !tcBelo
+        ? h("div", { className: "sub-empty" }, "Cargá el tipo de cambio USDT Belo arriba para ver la proyección en dólares.")
+        : !hayU
+          ? h("div", { className: "sub-empty" }, "Ingresá las unidades que esperás vender para ver el margen total proyectado en USD.")
+          : h("div", { className: "costo-out-grid" },
+              h(CampoCalculado, { label: "Margen real por unidad (USD)", value: moneyUsd(unitUsd) }),
+              h(CampoCalculado, { label: "Margen total proyectado (USD)", value: moneyUsd(unitUsd * u), highlight: true }),
+              unitUsdPromo != null && h(CampoCalculado, { label: "Margen total proyectado con promo (USD)", value: moneyUsd(unitUsdPromo * u), highlight: r.promo.margenRealPromo < r.mgUtilidad, danger: unitUsdPromo <= 0 }),
+              unitUsdPromo != null && h(CampoCalculado, { label: "Diferencia por la promo (USD)", value: moneyUsd((unitUsdPromo - unitUsd) * u) })));
+  })(), /*#__PURE__*/React.createElement("div", {
     className: "promo-block"
   }, /*#__PURE__*/React.createElement("h4", null, "Promoción vigente"), /*#__PURE__*/React.createElement("div", {
     className: "promo-fields"
@@ -1329,40 +1352,41 @@ function CostosPanel({
     setTasasCuotas(prev => ({ ...prev, [cuotas]: valor === '' ? '' : Number(valor) }));
   };
 
-  // ---------- NUEVO: tipo de cambio (dólar blue), global para todo el panel ----------
-  const [tcBlue, setTcBlueState] = useState(() => {
+  // ---------- Tipo de cambio: USDT Belo (precio ask), compartido con la Calculadora ----------
+  const [tcBelo, setTcBeloState] = useState(() => {
     try {
-      const s = window.localStorage.getItem('jopex_tc_blue');
+      const s = window.localStorage.getItem('jopex_tc_belo');
       return s ? JSON.parse(s).valor : null;
     } catch (e) { return null; }
   });
-  const [tcBlueFuente, setTcBlueFuente] = useState(() => {
+  const [tcBeloFuente, setTcBeloFuente] = useState(() => {
     try {
-      const s = window.localStorage.getItem('jopex_tc_blue');
+      const s = window.localStorage.getItem('jopex_tc_belo');
       return s ? JSON.parse(s).actualizado : '';
     } catch (e) { return ''; }
   });
-  const [tcBlueError, setTcBlueError] = useState('');
+  const [tcBeloError, setTcBeloError] = useState('');
   const guardarTC = (valor, actualizado) => {
-    setTcBlueState(valor);
-    setTcBlueFuente(actualizado);
-    try { window.localStorage.setItem('jopex_tc_blue', JSON.stringify({ valor, actualizado })); } catch (e) {}
+    setTcBeloState(valor);
+    setTcBeloFuente(actualizado);
+    try { window.localStorage.setItem('jopex_tc_belo', JSON.stringify({ valor, actualizado })); } catch (e) {}
   };
   const refrescarTC = async () => {
-    setTcBlueError('');
+    setTcBeloError('');
     try {
-      const resp = await fetch('https://dolarapi.com/v1/dolares/blue');
+      const resp = await fetch('https://criptoya.com/api/usdt/ars/1');
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const data = await resp.json();
-      if (!data.venta) throw new Error('La respuesta no trajo el valor de venta.');
-      guardarTC(data.venta, new Date().toLocaleString('es-AR'));
+      const ask = data && data.belo && data.belo.ask;
+      if (!ask) throw new Error('La respuesta no trajo la cotización de Belo.');
+      guardarTC(ask, new Date().toLocaleString('es-AR'));
     } catch (e) {
-      setTcBlueError('No se pudo traer el dólar blue automático (' + e.message + '). Cargalo a mano abajo.');
+      setTcBeloError('No se pudo traer la cotización de Belo automática (' + e.message + '). Cargalo a mano abajo.');
     }
   };
 
   React.useEffect(() => {
-    if (tcBlue == null) refrescarTC();
+    if (tcBelo == null) refrescarTC();
     // eslint-disable-next-line
   }, []);
 
@@ -1469,16 +1493,16 @@ function CostosPanel({
     className: "module-header"
   }, /*#__PURE__*/React.createElement("h1", null, "Costos"), /*#__PURE__*/React.createElement("p", null, MODULE_DESC.costos)),
   /*#__PURE__*/React.createElement("div", { className: "tc-bar" },
-    /*#__PURE__*/React.createElement("span", { className: "calc-field-label" }, "Tipo de cambio — dólar blue"),
+    /*#__PURE__*/React.createElement("span", { className: "calc-field-label" }, "Tipo de cambio — USDT Belo"),
     /*#__PURE__*/React.createElement("div", { className: "calc-field-input tc-value-box" },
       /*#__PURE__*/React.createElement("span", { className: "cell-prefix" }, "$"),
       /*#__PURE__*/React.createElement("input", {
-        type: "number", value: tcBlue == null ? '' : tcBlue, placeholder: '—',
+        type: "number", value: tcBelo == null ? '' : tcBelo, placeholder: '—',
         onChange: e => guardarTC(e.target.value === '' ? null : Number(e.target.value), 'cargado a mano')
       })),
     /*#__PURE__*/React.createElement("button", { type: "button", className: "add-btn", onClick: refrescarTC }, "⟳ Refrescar"),
     /*#__PURE__*/React.createElement("span", { className: "tc-fuente" },
-      tcBlueError || (tcBlueFuente ? 'Última actualización: ' + tcBlueFuente + ' (dolarapi.com, blue).' : 'Todavía no se cargó el TC.'))),
+      tcBeloError || (tcBeloFuente ? 'Última actualización: ' + tcBeloFuente + ' (criptoya.com, Belo ask).' : 'Todavía no se cargó el TC.'))),
   /*#__PURE__*/React.createElement("div", {
     className: "data-note"
   }, "Misma cascada que tu hoja COSTO: cargás el costo, los cargos de ML y el margen que querés — el panel calcula el precio de venta sugerido y todo el desglose. Usalo para comparar contra la competencia antes de publicar el precio final."), /*#__PURE__*/React.createElement("div", {
@@ -1547,7 +1571,7 @@ function CostosPanel({
       onRemove: removeProducto,
       tasasCuotas: tasasCuotas,
       onUpdateTasa: updateTasa,
-      tcBlue: tcBlue
+      tcBelo: tcBelo
     }))), /*#__PURE__*/React.createElement("div", {
     className: "sub-block"
   }, /*#__PURE__*/React.createElement("h3", null, "Historial de lotes (por producto)"), /*#__PURE__*/React.createElement("div", {
