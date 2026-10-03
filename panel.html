@@ -5571,6 +5571,16 @@ function JopexPanel() {
   }, [abiertos]);
   const alternarGrupo = (id) => setAbiertos(p => ({ ...p, [id]: !p[id] }));
 
+  // ---- Menú lateral: en pantalla grande se puede ocultar/mostrar (se recuerda en este navegador) ----
+  const [menuColapsado, setMenuColapsado] = useState(() => {
+    try { return window.localStorage.getItem('jopex_menu_colapsado') === '1'; } catch (e) { return false; }
+  });
+  const alternarMenuColapsado = () => setMenuColapsado(v => {
+    const nuevo = !v;
+    try { window.localStorage.setItem('jopex_menu_colapsado', nuevo ? '1' : '0'); } catch (e) {}
+    return nuevo;
+  });
+
   // ---- Menú lateral como cajón deslizable en celular/tablet ----
   const [menuAbierto, setMenuAbierto] = useState(false);
   const esChico = () => typeof window !== 'undefined'
@@ -5647,6 +5657,7 @@ function JopexPanel() {
         }
         .jopex-root * { box-sizing: border-box; }
         .jopex-header {
+          position: relative;
           height: 72px;
           flex-shrink: 0;
           background: var(--bg);
@@ -5698,6 +5709,24 @@ function JopexPanel() {
           display: flex;
           flex-direction: column;
           gap: 4px;
+          transition: width 0.2s ease, padding 0.2s ease;
+        }
+        .toggle-menu {
+          display: flex; align-items: center; gap: 9px;
+          position: absolute; left: 16px; top: 50%; transform: translateY(-50%);
+          background: var(--panel-2); border: 1px solid var(--border-soft);
+          color: var(--text-primary); border-radius: 10px;
+          padding: 8px 12px; cursor: pointer;
+          font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 600;
+        }
+        .toggle-menu:hover { border-color: var(--lime); }
+        .toggle-menu .barras { display: flex; flex-direction: column; gap: 3px; flex-shrink: 0; }
+        .toggle-menu .barras i { display: block; width: 16px; height: 2px; background: var(--lime); border-radius: 2px; }
+        @media (min-width: 901px) {
+          .jopex-sidebar.colapsada {
+            width: 0; padding-left: 0; padding-right: 0; border-right-width: 0;
+            overflow: hidden; visibility: hidden;
+          }
         }
         .nav-item {
           display: flex;
@@ -6897,6 +6926,7 @@ function JopexPanel() {
         @media (max-width: 900px) {
           .jopex-root { min-height: 100dvh; }
           .menu-btn { display: flex; }
+          .toggle-menu { display: none; }
           .jopex-header {
             position: sticky; top: 0; z-index: 40;
             height: 58px; padding: 0 12px;
@@ -7005,6 +7035,17 @@ function JopexPanel() {
     className: "jopex-header"
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
+    className: "toggle-menu",
+    "aria-label": menuColapsado ? "Mostrar el menú lateral" : "Ocultar el menú lateral",
+    "aria-expanded": String(!menuColapsado),
+    onClick: alternarMenuColapsado
+  }, /*#__PURE__*/React.createElement("span", { className: "barras" },
+      /*#__PURE__*/React.createElement("i", null),
+      /*#__PURE__*/React.createElement("i", null),
+      /*#__PURE__*/React.createElement("i", null)),
+     /*#__PURE__*/React.createElement("span", null, menuColapsado ? "Mostrar menú" : "Ocultar menú")
+  ), /*#__PURE__*/React.createElement("button", {
+    type: "button",
     className: "menu-btn",
     "aria-label": "Abrir el menú",
     onClick: () => setMenuAbierto(v => !v)
@@ -7025,7 +7066,7 @@ function JopexPanel() {
     className: "menu-tapa",
     onClick: () => setMenuAbierto(false)
   }) : null, /*#__PURE__*/React.createElement("nav", {
-    className: "jopex-sidebar" + (menuAbierto ? " abierto" : "")
+    className: "jopex-sidebar" + (menuAbierto ? " abierto" : "") + (menuColapsado ? " colapsada" : "")
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "cerrar-menu",
