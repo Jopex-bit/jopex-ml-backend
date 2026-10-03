@@ -1848,6 +1848,7 @@ function cotizacionVacia() {
     producto: '',
     linkML: '',
     linkAlibaba: '',
+    linkDocumento: '',
     proveedor: '',
     lineas: [lineaVacia()],
     envioUsd: '',
@@ -2163,6 +2164,17 @@ function CotizacionRow({
       campo('Envío total', 'envioUsd', 'US$', 'number'),
       campo('Link ML (competencia)', 'linkML'),
       campo('Link Alibaba', 'linkAlibaba'),
+      h('label', { className: 'cotiz-field' },
+        h('span', { className: 'calc-field-label' }, 'Proforma / PDF del proveedor (link de Drive)'),
+        h('div', { className: 'calc-field-input' },
+          h('input', {
+            type: 'text', value: c.linkDocumento || '', placeholder: 'Pegá el link de la carpeta cotizaciones',
+            onChange: e => onUpdate(c.id, 'linkDocumento', e.target.value)
+          }),
+          /^https?:\/\//i.test((c.linkDocumento || '').trim()) && h('a', {
+            href: c.linkDocumento.trim(), target: '_blank', rel: 'noreferrer', className: 'link-btn',
+            style: { marginLeft: 8, whiteSpace: 'nowrap' }
+          }, 'Abrir'))),
       campo('Comisión Alibaba', 'comisionAlibabaUsd', 'US$', 'number'),
       campo('TC del día', 'tc', '$', 'number'),
       h('label', { className: 'cotiz-field' },
