@@ -660,6 +660,16 @@ function evolucionPeriodoTexto(mes) {
   const sig = n === 12 ? 1 : n + 1;
   return '7/' + n + ' al 6/' + sig;
 }
+// Un período está "en curso" desde el día 7 de su mes hasta el día 6 del siguiente (inclusive):
+// ML todavía no emitió su factura, así que sus costos no están completos.
+function evolucionEnCurso(mes, hoy) {
+  const i = EVOLUCION_MESES.indexOf(mes);
+  if (i < 0) return false;
+  const n = 3 + i;
+  const ini = new Date(2026, n - 1, 7);
+  const fin = n === 12 ? new Date(2027, 0, 6, 23, 59, 59) : new Date(2026, n, 6, 23, 59, 59);
+  return hoy >= ini && hoy <= fin;
+}
 function calcularEvolucionMes(m) {
   const num = v => v === '' || v == null || isNaN(v) ? 0 : Number(v);
   const tieneAlgo = EVOLUCION_CAMPOS.concat(EVOLUCION_CAMPOS_2, EVOLUCION_CAMPOS_3).some(c => m[c.key] !== '' && m[c.key] != null);
@@ -696,8 +706,13 @@ function EvolucionPanel() {
       }
     }));
   };
+  const hoy = new Date();
+  const enCurso = EVOLUCION_MESES.map(mes => evolucionEnCurso(mes, hoy));
   const resultados = EVOLUCION_MESES.map(mes => calcularEvolucionMes(datos[mes]));
-  const mesesConDatos = resultados.filter(r => r != null);
+  // Los períodos en curso no entran en el acumulado ni en mejor/peor mes.
+  const mesesConDatos = resultados.filter((r, i) => r != null && !enCurso[i]);
+  const mesesEnCursoConDatos = EVOLUCION_MESES.filter((m, i) => resultados[i] != null && enCurso[i]);
+  const celdaCalc = (r, i, campo) => !r ? '—' : enCurso[i] ? 'En curso' : money(r[campo]);
   const resultadoAcumulado = mesesConDatos.reduce((s, r) => s + r.resultadoNeto, 0);
   const mejorMes = mesesConDatos.length ? Math.max(...mesesConDatos.map(r => r.resultadoNeto)) : null;
   const peorMes = mesesConDatos.length ? Math.min(...mesesConDatos.map(r => r.resultadoNeto)) : null;
@@ -730,7 +745,7 @@ function EvolucionPanel() {
     className: "kpi-value"
   }, mesesConDatos.length ? money(resultadoAcumulado) : '—'), /*#__PURE__*/React.createElement("div", {
     className: "kpi-sub"
-  }, mesesConDatos.length, " mes(es) con datos")), /*#__PURE__*/React.createElement("div", {
+  }, mesesConDatos.length, " mes(es) con datos", mesesEnCursoConDatos.length ? " · " + mesesEnCursoConDatos.join(", ") + " en curso, no incluido" : "")), /*#__PURE__*/React.createElement("div", {
     className: "kpi-card kpi-blue"
   }, /*#__PURE__*/React.createElement("div", {
     className: "kpi-label"
@@ -754,28 +769,30 @@ function EvolucionPanel() {
     key: mes
   }, mes, /*#__PURE__*/React.createElement("div", {
     className: "evo-periodo"
-  }, evolucionPeriodoTexto(mes)))))), /*#__PURE__*/React.createElement("tbody", null, EVOLUCION_CAMPOS.map(c => renderFila(c.label, c.key)), /*#__PURE__*/React.createElement("tr", {
+  }, evolucionPeriodoTexto(mes)), enCurso[EVOLUCION_MESES.indexOf(mes)] ? /*#__PURE__*/React.createElement("div", {
+    className: "evo-encurso"
+  }, "En curso") : null)))), /*#__PURE__*/React.createElement("tbody", null, EVOLUCION_CAMPOS.map(c => renderFila(c.label, c.key)), /*#__PURE__*/React.createElement("tr", {
     className: "evo-subtotal-row"
   }, /*#__PURE__*/React.createElement("td", {
     className: "evo-row-label"
   }, "Subtotal"), resultados.map((r, i) => /*#__PURE__*/React.createElement("td", {
     key: EVOLUCION_MESES[i],
-    className: "calc-cell"
-  }, r ? money(r.subtotal) : '—'))), EVOLUCION_CAMPOS_2.map(c => renderFila(c.label, c.key)), /*#__PURE__*/React.createElement("tr", {
+    className: "calc-cell" + (r && enCurso[i] ? " calc-encurso" : "")
+  }, celdaCalc(r, i, 'subtotal')))), EVOLUCION_CAMPOS_2.map(c => renderFila(c.label, c.key)), /*#__PURE__*/React.createElement("tr", {
     className: "evo-utilidad-row"
   }, /*#__PURE__*/React.createElement("td", {
     className: "evo-row-label"
   }, "Utilidad Bruta"), resultados.map((r, i) => /*#__PURE__*/React.createElement("td", {
     key: EVOLUCION_MESES[i],
-    className: "calc-cell"
-  }, r ? money(r.utilidadBruta) : '—'))), EVOLUCION_CAMPOS_3.map(c => renderFila(c.label, c.key)), /*#__PURE__*/React.createElement("tr", {
+    className: "calc-cell" + (r && enCurso[i] ? " calc-encurso" : "")
+  }, celdaCalc(r, i, 'utilidadBruta')))), EVOLUCION_CAMPOS_3.map(c => renderFila(c.label, c.key)), /*#__PURE__*/React.createElement("tr", {
     className: "evo-resultado-row"
   }, /*#__PURE__*/React.createElement("td", {
     className: "evo-row-label"
   }, "Resultado Neto"), resultados.map((r, i) => /*#__PURE__*/React.createElement("td", {
     key: EVOLUCION_MESES[i],
-    className: "calc-cell"
-  }, r ? money(r.resultadoNeto) : '—'))))))));
+    className: "calc-cell" + (r && enCurso[i] ? " calc-encurso" : "")
+  }, celdaCalc(r, i, 'resultadoNeto')))))))));
 }
 
 // ---------- Costos: replica la cascada real de la hoja COSTO del usuario ----------
@@ -6360,6 +6377,8 @@ function JopexPanel() {
           margin-bottom: 6px;
         }
         .stock-detalle-header .stock-producto-title { margin-bottom: 0; }
+        .evo-encurso { display: inline-block; margin-top: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; padding: 1px 8px; border-radius: 999px; background: rgba(245,166,35,0.14); color: var(--amber-glow); border: 1px solid rgba(245,166,35,0.35); }
+        .calc-encurso { color: var(--amber-glow) !important; font-weight: 600; font-size: 12.5px; }
         .evo-periodo { font-size: 10.5px; font-weight: 400; color: var(--text-secondary); margin-top: 2px; white-space: nowrap; }
         .stock-envios-table { min-width: 1000px; }
         .stock-envios-table select {
