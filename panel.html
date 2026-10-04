@@ -549,6 +549,15 @@ const EVOLUCION_CAMPOS = [{
 }, {
   key: 'otrosCostos',
   label: 'Otros Costos'
+}, {
+  key: 'mantenimientoPagina',
+  label: 'Mantenimiento Página MELI'
+}, {
+  key: 'impuestos',
+  label: 'Impuestos (percepción IIBB)'
+}, {
+  key: 'anulaciones',
+  label: 'Anulaciones de cargos'
 }];
 const EVOLUCION_CAMPOS_2 = [{
   key: 'costoMercaderia',
@@ -572,6 +581,9 @@ const evolucionMesVacio = () => ({
   costoEnvio: '',
   costosFull: '',
   otrosCostos: '',
+  mantenimientoPagina: '',
+  impuestos: '',
+  anulaciones: '',
   costoMercaderia: '',
   enviosFull: '',
   ads: '',
@@ -639,11 +651,20 @@ const EVOLUCION_INICIAL = {
   Noviembre: evolucionMesVacio(),
   Diciembre: evolucionMesVacio()
 };
+// Cada fila es un período de facturación de ML: del 7 del mes al 6 del siguiente
+// (se nombra por el mes en que empieza: Agosto = 7/8 al 6/9).
+function evolucionPeriodoTexto(mes) {
+  const i = EVOLUCION_MESES.indexOf(mes);
+  if (i < 0) return '';
+  const n = 3 + i;
+  const sig = n === 12 ? 1 : n + 1;
+  return '7/' + n + ' al 6/' + sig;
+}
 function calcularEvolucionMes(m) {
   const num = v => v === '' || v == null || isNaN(v) ? 0 : Number(v);
   const tieneAlgo = EVOLUCION_CAMPOS.concat(EVOLUCION_CAMPOS_2, EVOLUCION_CAMPOS_3).some(c => m[c.key] !== '' && m[c.key] != null);
   if (!tieneAlgo) return null;
-  const subtotal = num(m.ventas) + num(m.cargosMeli) + num(m.costoFinanciar) + num(m.bonifEnvio) + num(m.costoEnvio) - num(m.costosFull) - num(m.otrosCostos);
+  const subtotal = num(m.ventas) + num(m.cargosMeli) + num(m.costoFinanciar) + num(m.bonifEnvio) + num(m.costoEnvio) - num(m.costosFull) - num(m.otrosCostos) - num(m.mantenimientoPagina) - num(m.impuestos) + num(m.anulaciones);
   const utilidadBruta = subtotal - num(m.costoMercaderia) - num(m.enviosFull);
   const resultadoNeto = utilidadBruta - num(m.ads) - num(m.nubimetrics);
   return {
@@ -689,7 +710,7 @@ function EvolucionPanel() {
     key: mes
   }, /*#__PURE__*/React.createElement("input", {
     type: "number",
-    value: datos[mes][campo],
+    value: datos[mes][campo] == null ? '' : datos[mes][campo],
     onChange: e => updateCampo(mes, campo, e.target.value),
     placeholder: "—"
   }))));
@@ -699,7 +720,7 @@ function EvolucionPanel() {
     className: "module-header"
   }, /*#__PURE__*/React.createElement("h1", null, "Evolución"), /*#__PURE__*/React.createElement("p", null, MODULE_DESC.evolucion)), /*#__PURE__*/React.createElement("div", {
     className: "data-note"
-  }, "Misma cascada que tu hoja FLUJO. Subtotal resta Costos FULL y Otros Costos; Utilidad Bruta resta Costo de Mercadería y Envíos Full; Resultado Neto resta Ads y Nubimetrics."), /*#__PURE__*/React.createElement("div", {
+  }, "Cada columna es un período de facturación de Mercado Libre (del 7 al 6 del mes siguiente). Subtotal resta Costos FULL, Otros Costos, Mantenimiento Página MELI e Impuestos, y suma las Anulaciones de cargos (cargalas en positivo); Utilidad Bruta resta Costo de Mercadería y Envíos Full; Resultado Neto resta Ads y Nubimetrics."), /*#__PURE__*/React.createElement("div", {
     className: "kpi-row"
   }, /*#__PURE__*/React.createElement("div", {
     className: `kpi-card ${resultadoAcumulado >= 0 ? 'kpi-green' : 'kpi-red'}`
@@ -731,7 +752,9 @@ function EvolucionPanel() {
     className: "evo-row-label"
   }, "Mes"), EVOLUCION_MESES.map(mes => /*#__PURE__*/React.createElement("th", {
     key: mes
-  }, mes)))), /*#__PURE__*/React.createElement("tbody", null, EVOLUCION_CAMPOS.map(c => renderFila(c.label, c.key)), /*#__PURE__*/React.createElement("tr", {
+  }, mes, /*#__PURE__*/React.createElement("div", {
+    className: "evo-periodo"
+  }, evolucionPeriodoTexto(mes)))))), /*#__PURE__*/React.createElement("tbody", null, EVOLUCION_CAMPOS.map(c => renderFila(c.label, c.key)), /*#__PURE__*/React.createElement("tr", {
     className: "evo-subtotal-row"
   }, /*#__PURE__*/React.createElement("td", {
     className: "evo-row-label"
@@ -6337,6 +6360,7 @@ function JopexPanel() {
           margin-bottom: 6px;
         }
         .stock-detalle-header .stock-producto-title { margin-bottom: 0; }
+        .evo-periodo { font-size: 10.5px; font-weight: 400; color: var(--text-secondary); margin-top: 2px; white-space: nowrap; }
         .stock-envios-table { min-width: 1000px; }
         .stock-envios-table select {
           width: 100%;
