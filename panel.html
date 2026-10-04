@@ -653,6 +653,41 @@ const EVOLUCION_INICIAL = {
 };
 // Cada fila es un período de facturación de ML: del 7 del mes al 6 del siguiente
 // (se nombra por el mes en que empieza: Agosto = 7/8 al 6/9).
+// ---------- Evolución: guía de carga (de dónde sale cada dato) ----------
+// Todo lo de acá se verificó cruzando facturas y reportes reales de ML. Si ML cambia un
+// reporte, actualizar esta guía junto con el cálculo.
+const EVOLUCION_GUIA_REGLAS = [
+  'Cada columna es un período de facturación de ML: del 7 de un mes al 6 del siguiente. Se nombra por el mes en que EMPIEZA (Agosto = 7/8 al 6/9).',
+  'ML nombra sus facturas y reportes por el mes en que CIERRA el período. Por eso lo que ML llama "septiembre" es tu Agosto. Equivalencias: ver la lista de abajo.',
+  'Bajá TODOS los reportes con el rango exacto del 7 al 6. ML agrega un día de más al final (el 7): ese día es del período siguiente, ignoralo.',
+  'Un período recién se puede cargar completo desde el día 7, cuando ML emite la factura. Hasta el 6 figura "En curso" y no entra en los indicadores.',
+  'El PDF "Análisis de Facturación" es un resumen ya neteado: sirve para leer, no para cargar. Cargá desde los Excel/CSV y controlá contra la captura de la factura.',
+  'Signos: Ventas, Costos FULL, Otros costos, Mantenimiento, Impuestos, Anulaciones, Costo de mercadería, Envíos Full, Ads y Nubimetrics se cargan en POSITIVO. Cargos Meli y Costo envío se cargan en NEGATIVO. Costo x financiar y Bonificación envío quedan vacíos (ya están incluidos en los dos anteriores).'
+];
+const EVOLUCION_GUIA_CAMPOS = [
+  { campo: 'Ventas', signo: '+', fuente: 'Ventas brutas del Reporte de evolución del negocio (Métricas de negocio), del 7 al 6, MENOS las ventas anuladas.', nota: 'Solo Mercado Libre. Ese reporte dice 0 canceladas aunque haya anulaciones: las ventas anuladas se detectan en el Reporte de Facturación de ML (cargos con estado "Anulado en factura" o "Anulado en nota de crédito") sumando "Total de la venta" de cada una. Control: el bruto debe coincidir con la suma de "Total de la venta" de las ventas con cargo por vender.' },
+  { campo: 'Cargos Meli', signo: '−', fuente: 'Reporte de Facturación de Mercado Libre: suma de "Cargo por vender" + "Costo por ofrecer cuotas" (+ costo fijo si aparece). En la factura: "Cargos por venta".', nota: 'Incluye los cargos de ventas que después se anularon; esas anulaciones van en su propio renglón. Las cuotas ya están adentro: Costo x financiar queda vacío.' },
+  { campo: 'Costo envío', signo: '−', fuente: 'Reporte de Facturación de Mercado Libre: suma de "Cargo por envíos de Mercado Libre" (columna "Valor del cargo"). En la factura: "Cargos de envíos de Mercado Libre", el importe a pagar, no el tachado.', nota: 'Ya viene neto del descuento ("Descuento general"): por eso Bonificación envío queda vacía.' },
+  { campo: 'Costos FULL', signo: '+', fuente: 'Reporte de Cargos Full: suma de "Monto del cargo" (almacenamiento). En la factura: "Cargos de envíos full".', nota: 'Puede ser 0 o muy chico si hay poco stock en FULL.' },
+  { campo: 'Otros costos', signo: '+', fuente: 'Reporte de Facturación de Mercado Pago (CSV): "Cargo por adelanto de disponibilidad de dinero en cuenta". En la factura de ML: "Cargos por adelanto de disponibilidad" y "Cargos de Reputación".', nota: 'Sumar los que aparezcan. "Cargos de Mi página" NO va acá: tiene su renglón.' },
+  { campo: 'Mantenimiento Página MELI', signo: '+', fuente: 'Factura de ML: "Cargos de Mi página".', nota: 'No siempre existe; si no aparece en la factura, vacío.' },
+  { campo: 'Impuestos (percepción IIBB)', signo: '+', fuente: 'Factura de ML, sección "Percepciones": "Percepciones de Mercado Libre". También figura en el Reporte de Pagos y facturas (pago por percepción IIBB).', nota: 'Se toma como costo del flujo (decisión tuya: no se recupera). Si ML no cobró percepciones ese período, vacío.' },
+  { campo: 'Anulaciones de cargos', signo: '+', fuente: 'Suma de dos partes. (1) Anulaciones dentro de la factura: filas "Anulación del cargo..." (negativas) del Reporte de Facturación de ML, incluidas las de publicidad; en la factura: "Anulaciones de cargos". (2) Notas de crédito del período: factura, "Cobros automáticos y pagos" > "Anulaciones de cargos en nota de crédito".', nota: 'Se carga en positivo porque reduce el costo. Control de las notas de crédito: el importe tiene que coincidir en tres lugares: cargos "Anulado en nota de crédito" del Excel, Reporte de Notas de crédito y Reporte de Pagos. Ojo: el reporte de notas de crédito se nombra por el mes en que se EMITIÓ la nota, no por el de la venta: usá el que coincida con la factura.' },
+  { campo: 'Costo de mercadería', signo: '+', fuente: 'No sale de ningún reporte de ML. Es el costo de las unidades vendidas: unidades vendidas netas de anuladas × costo unitario (módulo Costos).', nota: 'Las ventas anuladas vuelven al stock, así que sus unidades no deberían contar. Pendiente: definir cómo se calcula cada mes.' },
+  { campo: 'Envíos Full', signo: '+', fuente: 'No sale de ML. Es lo que pagás por despachar mercadería a FULL (Andreani): facturas o comprobantes de Andreani del período.', nota: 'No confundir con "Costos FULL", que es el almacenamiento que cobra ML.' },
+  { campo: 'Ads', signo: '+', fuente: 'Reporte de Facturación de ML: "Cargo por campaña de publicidad de Product Ads" (bruto). Es lo mismo que el pago del Reporte de Pagos y facturas y que "Cargos por publicidad" de la factura.', nota: 'Control: el pago voluntario del período es igual a Ads − anulaciones de publicidad (+ Full, si lo cobraron en el mismo pago). Las anulaciones de Ads van en Anulaciones de cargos.' },
+  { campo: 'Nubimetrics', signo: '+', fuente: 'Suscripción mensual a Nubimetrics (hoy $101.035). Comprobante de Nubimetrics.', nota: 'No viene de ML.' }
+];
+const EVOLUCION_REPORTES = [
+  'Reporte de Facturación de Mercado Libre (Excel): una fila por cargo; de acá salen cargos por venta, cuotas, envíos, Ads, anulaciones y ventas.',
+  'Reporte de Facturación de Mercado Pago (CSV): adelanto de disponibilidad.',
+  'Reporte de Cargos Full (Excel): almacenamiento en FULL.',
+  'Reporte de Pagos y facturas (Excel): pagos de la factura (Ads, percepciones) y notas de crédito aplicadas.',
+  'Reporte de Notas de crédito (Excel): detalle de cada nota de crédito.',
+  'Reporte de evolución del negocio / Métricas de negocio (Excel): ventas brutas por día o por mes.',
+  'Captura de la factura (Cargos, Percepciones y Cobros automáticos y pagos): es el control final de que todo suma.'
+];
+const EVOLUCION_MESES_ML = ['abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre', 'enero'];
 function evolucionPeriodoTexto(mes) {
   const i = EVOLUCION_MESES.indexOf(mes);
   if (i < 0) return '';
@@ -716,6 +751,26 @@ function EvolucionPanel() {
   const resultadoAcumulado = mesesConDatos.reduce((s, r) => s + r.resultadoNeto, 0);
   const mejorMes = mesesConDatos.length ? Math.max(...mesesConDatos.map(r => r.resultadoNeto)) : null;
   const peorMes = mesesConDatos.length ? Math.min(...mesesConDatos.map(r => r.resultadoNeto)) : null;
+  const hGuia = React.createElement;
+  const guia = hGuia("details", { className: "evo-guia" },
+    hGuia("summary", null, "Guía de carga: de dónde sale cada dato"),
+    hGuia("div", { className: "evo-guia-cuerpo" },
+      hGuia("h3", null, "Reglas generales"),
+      hGuia("ul", null, EVOLUCION_GUIA_REGLAS.map((t, i) => hGuia("li", { key: i }, t))),
+      hGuia("h3", null, "Cómo se llama cada período en los reportes de ML"),
+      hGuia("ul", null, EVOLUCION_MESES.map((m, i) => hGuia("li", { key: m }, hGuia("b", null, m), " (" + evolucionPeriodoTexto(m) + ") = reportes y factura de \"" + EVOLUCION_MESES_ML[i] + " 2026\""))),
+      hGuia("h3", null, "Reportes que hay que bajar"),
+      hGuia("ul", null, EVOLUCION_REPORTES.map((t, i) => hGuia("li", { key: i }, t))),
+      hGuia("h3", null, "Campo por campo"),
+      hGuia("div", { className: "table-scroll" },
+        hGuia("table", { className: "evo-guia-tabla" },
+          hGuia("thead", null, hGuia("tr", null,
+            hGuia("th", null, "Campo"), hGuia("th", null, "Signo"), hGuia("th", null, "De dónde sale"), hGuia("th", null, "Ojo con"))),
+          hGuia("tbody", null, EVOLUCION_GUIA_CAMPOS.map(c => hGuia("tr", { key: c.campo },
+            hGuia("td", { className: "evo-guia-campo" }, c.campo),
+            hGuia("td", { className: "evo-guia-signo" }, c.signo === '+' ? 'Positivo' : 'Negativo'),
+            hGuia("td", null, c.fuente),
+            hGuia("td", null, c.nota))))))));
   const renderFila = (label, campo, esNegativoVisual) => /*#__PURE__*/React.createElement("tr", {
     key: campo
   }, /*#__PURE__*/React.createElement("td", {
@@ -735,7 +790,7 @@ function EvolucionPanel() {
     className: "module-header"
   }, /*#__PURE__*/React.createElement("h1", null, "Evolución"), /*#__PURE__*/React.createElement("p", null, MODULE_DESC.evolucion)), /*#__PURE__*/React.createElement("div", {
     className: "data-note"
-  }, "Cada columna es un período de facturación de Mercado Libre (del 7 al 6 del mes siguiente). Subtotal resta Costos FULL, Otros Costos, Mantenimiento Página MELI e Impuestos, y suma las Anulaciones de cargos (cargalas en positivo); Utilidad Bruta resta Costo de Mercadería y Envíos Full; Resultado Neto resta Ads y Nubimetrics."), /*#__PURE__*/React.createElement("div", {
+  }, "Cada columna es un período de facturación de Mercado Libre (del 7 al 6 del mes siguiente). Al final de la página está la guía de carga: de dónde sale cada dato. Subtotal resta Costos FULL, Otros Costos, Mantenimiento Página MELI e Impuestos, y suma las Anulaciones de cargos (cargalas en positivo); Utilidad Bruta resta Costo de Mercadería y Envíos Full; Resultado Neto resta Ads y Nubimetrics."), /*#__PURE__*/React.createElement("div", {
     className: "kpi-row"
   }, /*#__PURE__*/React.createElement("div", {
     className: `kpi-card ${resultadoAcumulado >= 0 ? 'kpi-green' : 'kpi-red'}`
@@ -792,7 +847,7 @@ function EvolucionPanel() {
   }, "Resultado Neto"), resultados.map((r, i) => /*#__PURE__*/React.createElement("td", {
     key: EVOLUCION_MESES[i],
     className: "calc-cell" + (r && enCurso[i] ? " calc-encurso" : "")
-  }, celdaCalc(r, i, 'resultadoNeto')))))))));
+  }, celdaCalc(r, i, 'resultadoNeto')))))))), guia);
 }
 
 // ---------- Costos: replica la cascada real de la hoja COSTO del usuario ----------
@@ -6377,6 +6432,17 @@ function JopexPanel() {
           margin-bottom: 6px;
         }
         .stock-detalle-header .stock-producto-title { margin-bottom: 0; }
+        .evo-guia { margin-top: 18px; background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: 12px; padding: 4px 16px; }
+        .evo-guia > summary { cursor: pointer; padding: 12px 0; font-weight: 700; color: var(--blue-glow); font-size: 14px; }
+        .evo-guia-cuerpo { padding: 4px 0 14px; font-size: 12.5px; color: var(--text-secondary); line-height: 1.55; }
+        .evo-guia-cuerpo h3 { margin: 16px 0 6px; font-size: 13px; color: var(--text-primary); }
+        .evo-guia-cuerpo ul { margin: 0; padding-left: 18px; }
+        .evo-guia-cuerpo li { margin-bottom: 4px; }
+        .evo-guia-tabla { width: 100%; min-width: 760px; border-collapse: collapse; }
+        .evo-guia-tabla th { text-align: left; font-size: 11.5px; color: var(--text-secondary); padding: 6px 10px; border-bottom: 1px solid var(--border-soft); }
+        .evo-guia-tabla td { vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--border-soft); }
+        .evo-guia-campo { font-weight: 700; color: var(--text-primary); white-space: nowrap; }
+        .evo-guia-signo { white-space: nowrap; }
         .evo-encurso { display: inline-block; margin-top: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; padding: 1px 8px; border-radius: 999px; background: rgba(245,166,35,0.14); color: var(--amber-glow); border: 1px solid rgba(245,166,35,0.35); }
         .calc-encurso { color: var(--amber-glow) !important; font-weight: 600; font-size: 12.5px; }
         .evo-periodo { font-size: 10.5px; font-weight: 400; color: var(--text-secondary); margin-top: 2px; white-space: nowrap; }
