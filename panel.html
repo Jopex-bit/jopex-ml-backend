@@ -1127,12 +1127,21 @@ function costoEfectivo(p, cotizaciones) {
   const lineas = comps.map(k => {
     let unit = NaN, definitivo = false, aviso = '';
     if (k.cotizacionClave) {
-      const c = cotizacionElegida(cotizaciones, k.cotizacionClave);
-      if (!c) aviso = 'No hay una cotización elegida de esta pieza en Investigación.';
+      // Si la pieza no tiene ninguna cotización elegida, se usa la última cargada que no esté
+      // descartada (con un aviso), para no dejar el costo en cero por no haber tocado "Marcar como elegido".
+      let c = cotizacionElegida(cotizaciones, k.cotizacionClave), provisoria = false;
+      if (!c) {
+        const cand = (cotizaciones || []).filter(x => claveCotizacion(x) === k.cotizacionClave && estadoCotizacion(x) !== 'descartado');
+        if (cand.length) { c = cand[cand.length - 1]; provisoria = true; }
+      }
+      if (!c) aviso = 'No hay una cotización de esta pieza en Investigación (o están todas descartadas).';
       else {
         const x = costoUnitarioCotizacion(c, k.linea);
-        if (!x) aviso = 'La cotización elegida está incompleta (falta TC, valor o tasa).';
-        else { unit = x.valor; definitivo = x.definitivo; }
+        if (!x) aviso = 'La cotización ' + (provisoria ? '' : 'elegida ') + 'está incompleta (falta TC, valor o tasa).';
+        else {
+          unit = x.valor; definitivo = x.definitivo;
+          if (provisoria) aviso = 'Usando la última cotización cargada: todavía no la marcaste como elegida en Investigación.';
+        }
       }
     } else {
       unit = k.costo === '' || k.costo == null ? NaN : Number(k.costo);
