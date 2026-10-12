@@ -1072,19 +1072,159 @@ function CampoCalculado({
     className: "calc-out-value"
   }, value));
 }
+// ---------- Componentes del costo (SKU armados con varias piezas) ----------
+// Una tarjeta de Costos puede tener renglones ("componentes"): cada uno es un costo manual
+// o una referencia a una cotización de Investigación (completa o una de sus líneas).
+// Valor de Adquisición = suma(costo unitario x cantidad). Sin renglones, nada cambia.
+// La referencia es por nombre de producto de la cotización, no por copia: si se elige un lote
+// nuevo, todos los SKU que usan esa pieza se actualizan solos.
+const claveCotizacion = c => (c.producto || '').trim().toLowerCase();
+const estadoCotizacion = c => c.estado || (c.destinoMl ? 'elegido' : 'pendiente');
+function gruposCotizaciones(cotizaciones) {
+  const mapa = {};
+  (cotizaciones || []).forEach(c => {
+    const k = claveCotizacion(c);
+    if (!k) return;
+    if (!mapa[k]) mapa[k] = { clave: k, nombre: (c.producto || '').trim(), items: [] };
+    mapa[k].items.push(c);
+  });
+  return Object.values(mapa);
+}
+function cotizacionElegida(cotizaciones, clave) {
+  const elegidas = (cotizaciones || []).filter(c => claveCotizacion(c) === clave && estadoCotizacion(c) === 'elegido');
+  return elegidas.length ? elegidas[elegidas.length - 1] : null;
+}
+// Costo unitario en ARS de una cotización (definitivo si ya se nacionalizó, si no el estimado).
+// linea = '' -> cotización completa; '0','1'.. -> una pieza de una cotización multi-línea.
+function costoUnitarioCotizacion(c, linea) {
+  const r = calcularCotizacion(c);
+  if (!r) return null;
+  const def = calcularDefinitivo(c, r);
+  const completo = def ? def.unitario : r.precioLandedArs;
+  if (linea === '' || linea == null || r.detalle.length < 2) return { valor: completo, definitivo: !!def };
+  const d = r.detalle[Number(linea)];
+  const tc = Number(c.tc);
+  if (!d || isNaN(tc)) return null;
+  // Cada impuesto es lineal sobre el CIF de la línea, así que se puede aislar por pieza.
+  const est = d.cif * 0.03;
+  const iva = (d.cif + d.derecho + est) * 0.21;
+  const usd = d.cif + d.derecho + est + iva + r.comision * d.share;
+  const cant = d.cant > 0 ? d.cant : r.unidades;
+  const estimado = usd / cant * tc;
+  // Si el lote ya tiene costo real, se escala la pieza con la misma proporción real/estimado.
+  const escala = def && r.precioLandedArs > 0 ? def.unitario / r.precioLandedArs : 1;
+  return { valor: estimado * escala, definitivo: !!def };
+}
+function componenteVacio() {
+  return { id: `k${Date.now()}${Math.random().toString(36).slice(2, 5)}`, nombre: '', costo: '', cantidad: '1', cotizacionClave: '', linea: '' };
+}
+function costoEfectivo(p, cotizaciones) {
+  const comps = Array.isArray(p.componentes) ? p.componentes : [];
+  if (!comps.length) return null;
+  let total = 0;
+  const lineas = comps.map(k => {
+    let unit = NaN, definitivo = false, aviso = '';
+    if (k.cotizacionClave) {
+      const c = cotizacionElegida(cotizaciones, k.cotizacionClave);
+      if (!c) aviso = 'No hay una cotización elegida de esta pieza en Investigación.';
+      else {
+        const x = costoUnitarioCotizacion(c, k.linea);
+        if (!x) aviso = 'La cotización elegida está incompleta (falta TC, valor o tasa).';
+        else { unit = x.valor; definitivo = x.definitivo; }
+      }
+    } else {
+      unit = k.costo === '' || k.costo == null ? NaN : Number(k.costo);
+      if (isNaN(unit)) aviso = 'Falta cargar el costo.';
+    }
+    const cant = k.cantidad === '' || k.cantidad == null ? 1 : Number(k.cantidad);
+    const subtotal = unit * cant;
+    if (!isNaN(subtotal)) total += subtotal;
+    return { ...k, unit, definitivo, aviso, subtotal };
+  });
+  return { total: Math.round(total * 100) / 100, lineas };
+}
+function productoConCostoEfectivo(p, cotizaciones) {
+  const ef = costoEfectivo(p, cotizaciones);
+  return ef ? { ...p, valorAdquisicion: ef.total } : p;
+}
+function ComponentesCosto({ p, cotizaciones, ef, onUpdate }) {
+  const h = React.createElement;
+  const comps = Array.isArray(p.componentes) ? p.componentes : [];
+  const grupos = gruposCotizaciones(cotizaciones);
+  const set = nuevo => onUpdate(p.id, 'componentes', nuevo);
+  const upd = (id, campo, valor) => set(comps.map(k => k.id === id ? { ...k, [campo]: valor } : k));
+  const elegirOrigen = (id, clave) => set(comps.map(k => k.id === id ? { ...k, cotizacionClave: clave, linea: '' } : k));
+  const desglosar = () => {
+    const v = Number(p.valorAdquisicion);
+    set([{ ...componenteVacio(), nombre: 'Costo actual', costo: !isNaN(v) && v > 0 ? String(v) : '' }]);
+  };
+  return h('div', { className: 'componentes-block' },
+    h('h4', null, 'Componentes del costo'),
+    !comps.length
+      ? h('div', { className: 'componentes-vacio' },
+          h('span', null, 'Hoy este producto tiene un solo costo. Si se arma con varias piezas (por ejemplo holder + dispositivo), desglosalo para sumar cada una.'),
+          h('button', { type: 'button', className: 'add-btn', onClick: desglosar }, 'Desglosar en componentes'))
+      : h('div', null,
+          ef.lineas.map(k => {
+            const c = k.cotizacionClave ? cotizacionElegida(cotizaciones, k.cotizacionClave) : null;
+            const rq = c ? calcularCotizacion(c) : null;
+            const piezas = rq ? rq.detalle : [];
+            return h('div', { key: k.id, className: 'comp-fila' },
+              h('label', { className: 'calc-field', style: { flex: '1 1 150px' } },
+                h('span', { className: 'calc-field-label' }, 'Componente'),
+                h('div', { className: 'calc-field-input' },
+                  h('input', { type: 'text', value: k.nombre || '', placeholder: 'ej: Holder silicona', onChange: e => upd(k.id, 'nombre', e.target.value) }))),
+              h('label', { className: 'calc-field', style: { flex: '1 1 170px' } },
+                h('span', { className: 'calc-field-label' }, 'De dónde sale el costo'),
+                h('div', { className: 'calc-field-input' },
+                  h('select', { value: k.cotizacionClave || '', onChange: e => elegirOrigen(k.id, e.target.value) },
+                    h('option', { value: '' }, 'Manual (en $)'),
+                    grupos.map(g => h('option', { key: g.clave, value: g.clave }, 'Cotización: ' + g.nombre.slice(0, 34) + (cotizacionElegida(cotizaciones, g.clave) ? ' ✓' : ' (sin elegir)')))))),
+              k.cotizacionClave && piezas.length > 1 && h('label', { className: 'calc-field', style: { flex: '1 1 170px' } },
+                h('span', { className: 'calc-field-label' }, 'Pieza de la cotización'),
+                h('div', { className: 'calc-field-input' },
+                  h('select', { value: k.linea == null ? '' : k.linea, onChange: e => upd(k.id, 'linea', e.target.value) },
+                    h('option', { value: '' }, 'Todas las piezas juntas'),
+                    piezas.map((d, i) => h('option', { key: i, value: String(i) }, 'Pieza ' + (i + 1) + (d.desc ? ': ' + d.desc : '')))))),
+              k.cotizacionClave
+                ? h('div', { className: 'calc-field', style: { flex: '0 1 130px' } },
+                    h('span', { className: 'calc-field-label' }, 'Costo unitario'),
+                    h('div', { className: 'calc-out' }, h('span', { className: 'calc-out-value' }, isNaN(k.unit) ? '—' : money(k.unit)),
+                      !isNaN(k.unit) && h('span', { className: 'comp-tag' }, k.definitivo ? 'definitivo' : 'estimado')))
+                : h('label', { className: 'calc-field', style: { flex: '0 1 130px' } },
+                    h('span', { className: 'calc-field-label' }, 'Costo unitario'),
+                    h('div', { className: 'calc-field-input' }, h('span', { className: 'cell-prefix' }, '$'),
+                      h('input', { type: 'number', value: k.costo, placeholder: '—', onChange: e => upd(k.id, 'costo', e.target.value) }))),
+              h('label', { className: 'calc-field', style: { flex: '0 1 80px' } },
+                h('span', { className: 'calc-field-label' }, 'Cantidad'),
+                h('div', { className: 'calc-field-input' },
+                  h('input', { type: 'number', value: k.cantidad == null ? '' : k.cantidad, placeholder: '1', onChange: e => upd(k.id, 'cantidad', e.target.value) }))),
+              h('div', { className: 'calc-field', style: { flex: '0 1 120px' } },
+                h('span', { className: 'calc-field-label' }, 'Subtotal'),
+                h('div', { className: 'calc-out' }, h('span', { className: 'calc-out-value' }, isNaN(k.subtotal) ? '—' : money(k.subtotal)))),
+              h('button', { type: 'button', className: 'icon-btn', 'aria-label': 'Quitar componente', onClick: () => set(comps.filter(x => x.id !== k.id)) }, h(Trash2, { size: 14 })),
+              k.aviso && h('div', { className: 'comp-aviso' }, k.aviso));
+          }),
+          h('div', { className: 'comp-pie' },
+            h('button', { type: 'button', className: 'add-btn', onClick: () => set([...comps, componenteVacio()]) }, h(Plus, { size: 14 }), 'Agregar componente'),
+            h('span', { className: 'comp-total' }, 'Valor de Adquisición = suma de componentes: ', h('b', null, money(ef.total))))));
+}
+
 function ProductoCostoCard({
   p,
   onUpdate,
   onRemove,
   tasasCuotas,
   onUpdateTasa,
-  tcBelo
+  tcBelo,
+  cotizaciones
 }) {
   const [editandoTasas, setEditandoTasas] = useState(false);
   const [guardandoSku, setGuardandoSku] = useState(false);
   const [skuMsg, setSkuMsg] = useState('');
   const [skuError, setSkuError] = useState('');
-  const r = calcularCosto(p, tasasCuotas);
+  const ef = costoEfectivo(p, cotizaciones);
+  const r = calcularCosto(ef ? { ...p, valorAdquisicion: ef.total } : p, tasasCuotas);
 
   const guardarSku = async () => {
     const sku = (p.sku || '').trim();
@@ -1150,16 +1290,21 @@ function ProductoCostoCard({
           skuError && /*#__PURE__*/React.createElement("span", { className: "sku-error" }, skuError))
       : /*#__PURE__*/React.createElement("span", { className: "sku-sin-vincular" },
           "Sin vincular a una publicación real todavía — sincronizá con Mercado Libre primero.")),
+  /*#__PURE__*/React.createElement(ComponentesCosto, { p: p, cotizaciones: cotizaciones, ef: ef, onUpdate: onUpdate }),
   /*#__PURE__*/React.createElement("div", {
     className: "costo-card-body"
   }, /*#__PURE__*/React.createElement("div", {
     className: "costo-block"
-  }, /*#__PURE__*/React.createElement("h4", null, "Costo del producto"), /*#__PURE__*/React.createElement(CampoInput, {
+  }, /*#__PURE__*/React.createElement("h4", null, "Costo del producto"), (ef ? /*#__PURE__*/React.createElement(CampoCalculado, {
+    label: "Valor de Adquisición (suma de componentes)",
+    value: money(ef.total),
+    highlight: true
+  }) : /*#__PURE__*/React.createElement(CampoInput, {
     label: "Valor de Adquisición (último lote)",
     prefix: "$",
     value: p.valorAdquisicion,
     onChange: v => onUpdate(p.id, 'valorAdquisicion', v)
-  }), /*#__PURE__*/React.createElement(CampoInput, {
+  })), /*#__PURE__*/React.createElement(CampoInput, {
     label: "Costo Envío ML",
     prefix: "$",
     value: p.envioML,
@@ -1387,7 +1532,8 @@ function PromoVenceBadge({
 function CostosPanel({
   productos,
   setProductos,
-  seleccion
+  seleccion,
+  cotizaciones
 }) {
   const updateField = (id, field, value) => {
     setProductos(prev => prev.map(p => p.id === id ? {
@@ -1578,7 +1724,7 @@ function CostosPanel({
     }
   };
 
-  const resultados = productos.map(p => calcularCosto(p, tasasCuotas)).filter(r => r && !r.error);
+  const resultados = productos.map(p => calcularCosto(productoConCostoEfectivo(p, cotizaciones), tasasCuotas)).filter(r => r && !r.error);
   const margenProm = resultados.length ? resultados.reduce((s, r) => s + r.mgUtilidad, 0) / resultados.length : null;
   const roasPeor = resultados.length ? Math.max(...resultados.map(r => r.roasMinimo)) : null;
   const bajoUmbral = resultados.filter(r => r.mgUtilidad < 35).length;
@@ -1666,7 +1812,8 @@ function CostosPanel({
       onRemove: removeProducto,
       tasasCuotas: tasasCuotas,
       onUpdateTasa: updateTasa,
-      tcBelo: tcBelo
+      tcBelo: tcBelo,
+      cotizaciones: cotizaciones
     }))), /*#__PURE__*/React.createElement("div", {
     className: "sub-block"
   }, /*#__PURE__*/React.createElement("h3", null, "Historial de lotes (por producto)"), /*#__PURE__*/React.createElement("div", {
@@ -2766,6 +2913,15 @@ function InvestigacionPanel({
         const idx = prev.findIndex(p => p.mlItemId === destinoMl || p.id === 'ml' + destinoMl);
         if (idx >= 0) {
           const copia = prev.slice();
+          // Si la tarjeta se arma con componentes, no se pisa el total: se vincula esta
+          // cotización como un componente más (si todavía no está) y el costo se toma por referencia.
+          if (Array.isArray(copia[idx].componentes) && copia[idx].componentes.length) {
+            const clave = claveCotizacion(c);
+            if (!copia[idx].componentes.some(k => k.cotizacionClave === clave)) {
+              copia[idx] = { ...copia[idx], componentes: [...copia[idx].componentes, { ...componenteVacio(), nombre, cotizacionClave: clave }] };
+            }
+            return copia;
+          }
           copia[idx] = { ...copia[idx], valorAdquisicion: valor };
           return copia;
         }
@@ -2786,6 +2942,14 @@ function InvestigacionPanel({
     setProductos(prev => {
       const existente = prev.find(p => p.nombre.trim().toLowerCase() === nombre.toLowerCase());
       if (existente) {
+        if (Array.isArray(existente.componentes) && existente.componentes.length) {
+          const clave = claveCotizacion(c);
+          if (existente.componentes.some(k => k.cotizacionClave === clave)) return prev;
+          return prev.map(p => p.id === existente.id ? {
+            ...p,
+            componentes: [...p.componentes, { ...componenteVacio(), nombre, cotizacionClave: clave }]
+          } : p);
+        }
         return prev.map(p => p.id === existente.id ? {
           ...p,
           valorAdquisicion: valor
@@ -5289,10 +5453,13 @@ function ModulePanel({
   sel,
   elegir
 }) {
+  // Costos edita los datos crudos; el resto de los módulos lee el costo ya sumado.
+  const productosCosto = React.useMemo(() => productos.map(p => productoConCostoEfectivo(p, cotizaciones)), [productos, cotizaciones]);
   if (moduleId === 'costos') return /*#__PURE__*/React.createElement(CostosPanel, {
     productos: productos,
     setProductos: setProductos,
-    seleccion: sel.costos
+    seleccion: sel.costos,
+    cotizaciones: cotizaciones
   });
   if (moduleId === 'evolucion') return /*#__PURE__*/React.createElement(EvolucionPanel, null);
   if (moduleId === 'investigacion') return /*#__PURE__*/React.createElement(InvestigacionPanel, {
@@ -5304,14 +5471,14 @@ function ModulePanel({
     setSeleccion: (v) => elegir('investigacion', v)
   });
   if (moduleId === 'stock') return /*#__PURE__*/React.createElement(StockPanel, {
-    productosCostos: productos,
+    productosCostos: productosCosto,
     productos: stockProductos,
     setProductos: setStockProductos,
     seleccion: sel.stock,
     cotizaciones: cotizaciones
   });
   if (moduleId === 'ads') return /*#__PURE__*/React.createElement(AdsPanel, {
-    productos: productos,
+    productos: productosCosto,
     stockProductos: stockProductos,
     cfg: adsCfg,
     setCfg: setAdsCfg,
@@ -5319,7 +5486,7 @@ function ModulePanel({
     elegir: elegir
   });
   if (moduleId === 'tiendanube') return /*#__PURE__*/React.createElement(TiendaNubePanel, {
-    productos: productos
+    productos: productosCosto
   });
   if (moduleId === 'calculadora') return /*#__PURE__*/React.createElement(CalculadoraRapidaPanel, null);
   return /*#__PURE__*/React.createElement(GenericModulePanel, {
@@ -5689,7 +5856,7 @@ function JopexPanel() {
   }, [menuAbierto]);
 
   // Submenús del menú lateral
-  const subCostos = productos.map(p => ({
+  const subCostos = productos.map(p => productoConCostoEfectivo(p, cotizaciones)).map(p => ({
     id: p.id,
     label: (p.apodo || p.nombre || '(sin nombre)').slice(0, 34),
     alerta: (() => { const r = calcularCosto(p); return r && !r.error && r.promo && r.promo.margenRealPromo < 0; })()
@@ -6432,6 +6599,16 @@ function JopexPanel() {
           margin-bottom: 6px;
         }
         .stock-detalle-header .stock-producto-title { margin-bottom: 0; }
+        .componentes-block { margin: 0 0 14px; padding: 12px 14px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-soft); border-radius: 10px; }
+        .componentes-block h4 { margin: 0 0 10px; font-size: 12.5px; color: var(--blue-glow); }
+        .componentes-vacio { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; font-size: 12.5px; color: var(--text-secondary); }
+        .comp-fila { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; padding: 8px 0; border-bottom: 1px dashed var(--border-soft); }
+        .comp-fila select { width: 100%; }
+        .comp-tag { font-size: 10px; margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: rgba(61,155,255,0.12); color: var(--blue-glow); }
+        .comp-aviso { flex: 1 1 100%; font-size: 11.5px; color: var(--amber-glow); }
+        .comp-pie { display: flex; gap: 14px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding-top: 10px; }
+        .comp-total { font-size: 12.5px; color: var(--text-secondary); }
+        .comp-total b { color: var(--text-primary); font-size: 14px; }
         .evo-guia { margin-top: 18px; background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: 12px; padding: 4px 16px; }
         .evo-guia > summary { cursor: pointer; padding: 12px 0; font-weight: 700; color: var(--blue-glow); font-size: 14px; }
         .evo-guia-cuerpo { padding: 4px 0 14px; font-size: 12.5px; color: var(--text-secondary); line-height: 1.55; }
