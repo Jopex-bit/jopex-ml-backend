@@ -2457,7 +2457,23 @@ function CotizacionRow({
     // ---------- Envío, links y TC ----------
     h('div', { className: 'cotiz-fields-grid' },
       campo('Envío total', 'envioUsd', 'US$', 'number'),
-      campo('Link ML (competencia)', 'linkML'),
+      h('label', { className: 'cotiz-field' },
+        h('span', { className: 'calc-field-label' }, 'Courier'),
+        h('div', { className: 'calc-field-input' },
+          h('select', { value: c.courier || '', onChange: e => onUpdate(c.id, 'courier', e.target.value) },
+            h('option', { value: '' }, '— elegir —'),
+            ['DHL', 'FedEx', 'UPS'].map(k => h('option', { key: k, value: k }, k))))),
+      h('label', { className: 'cotiz-field' },
+        h('span', { className: 'calc-field-label' }, 'Número de tracking'),
+        h('div', { className: 'calc-field-input' },
+          h('input', {
+            type: 'text', value: c.tracking || '', placeholder: 'ej: 1234567890',
+            onChange: e => onUpdate(c.id, 'tracking', e.target.value)
+          }),
+          urlSeguimiento(c.courier, c.tracking) && h('a', {
+            href: urlSeguimiento(c.courier, c.tracking), target: '_blank', rel: 'noreferrer', className: 'link-btn',
+            style: { marginLeft: 8, whiteSpace: 'nowrap' }
+          }, 'Seguir'))),
       campo('Link Alibaba', 'linkAlibaba'),
       h('label', { className: 'cotiz-field' },
         h('span', { className: 'calc-field-label' }, 'Proforma / PDF del proveedor (link de Drive)'),
@@ -2569,8 +2585,11 @@ function CotizacionRow({
             (Math.abs(def.desvio) > 15 ? ' — conviene revisar la alícuota que usás para estimar.' : '')))),
 
       // ---------- Destino ----------
+      h('label', { className: 'cotiz-pieza' },
+        h('input', { type: 'checkbox', checked: !!c.esPieza, onChange: e => onUpdate(c.id, 'esPieza', e.target.checked) }),
+        h('span', null, 'Es una pieza (no crea tarjeta en Costos; se suma después a un SKU)')),
       h('div', { className: 'cotiz-enviar-fila' },
-        h('label', { className: 'cotiz-destino' },
+        !c.esPieza && h('label', { className: 'cotiz-destino' },
           h('span', { className: 'calc-field-label' }, 'Mandar el costo a'),
           h('select', {
             value: destino,
@@ -2582,9 +2601,11 @@ function CotizacionRow({
         h('button', {
           type: 'button', className: 'add-btn cotiz-enviar-btn',
           onClick: () => onSetEstado(c, estado === 'elegido' ? 'pendiente' : 'elegido', r, def, destino)
-        }, estado === 'elegido' ? '✓ Elegido — pasó a Costos' : 'Marcar como elegido')),
+        }, estado === 'elegido' ? (c.esPieza ? '✓ Elegido — pieza lista para armar SKU' : '✓ Elegido — pasó a Costos') : 'Marcar como elegido')),
       h('p', { className: 'lineas-hint' },
-        estado === 'elegido'
+        estado === 'elegido' && c.esPieza
+          ? 'Pieza elegida: no se creó tarjeta en Costos. Sumala como componente en el SKU que la usa (Costos → Componentes).'
+          : estado === 'elegido'
           ? (def
               ? 'Se mandó el costo DEFINITIVO: ' + money(def.unitario) + ' por unidad. Las demás cotizaciones de este producto quedan descartadas.'
               : 'Se mandó el costo estimado: ' + money(r.precioLandedArs) + ' por unidad. Las demás cotizaciones de este producto quedan descartadas.')
@@ -3025,7 +3046,7 @@ function InvestigacionPanel({
   // Marca una cotización como 'elegido' (manda su costo a Costos y descarta las
   // demás del mismo producto) o la vuelve a 'pendiente'.
   const marcarEstado = (c, nuevoEstado, r, def, destinoMl) => {
-    if (nuevoEstado === 'elegido' && r) {
+    if (nuevoEstado === 'elegido' && r && !c.esPieza) {
       enviarACostos(c, r, destinoMl, def);
     }
     const grupoDe = x => (x.producto || '').trim().toLowerCase();
@@ -3444,12 +3465,13 @@ function ResumenStockRow({
 // al editar un campo común en una fila, se replica en las demás del grupo.
 const ENVIO_GRUPO_INTL = ['courierIntl', 'trackingIntl', 'fechaPago', 'fechaDespachoOrigen', 'fechaLlegadaAduana', 'fechaLlegadaDeposito'];
 const ENVIO_GRUPO_FULL = ['courierFull', 'trackingFull', 'gestionFull', 'fechaDespachoFull', 'fechaLlegadaFull'];
-const COURIERS_INTL = ['DHL', 'UPS', 'Otro'];
+const COURIERS_INTL = ['DHL', 'FedEx', 'UPS', 'Otro'];
 function urlSeguimiento(courier, numero) {
   const t = encodeURIComponent((numero || '').trim());
   if (!t) return '';
   if (courier === 'DHL') return 'https://www.dhl.com/global-en/home/tracking/tracking-express.html?submit=1&tracking-id=' + t;
   if (courier === 'UPS') return 'https://www.ups.com/track?loc=es_AR&tracknum=' + t;
+  if (courier === 'FedEx') return 'https://www.fedex.com/fedextrack/?trknbr=' + t;
   return '';
 }
 function envioVacio() {
@@ -6922,6 +6944,7 @@ function JopexPanel() {
           font-size: 12px; color: var(--text-secondary); font-style: italic;
           padding: 10px 0 2px;
         }
+        .cotiz-pieza { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-secondary); margin: 6px 0 10px; cursor: pointer; }
         .competencia-links { display: block; margin-bottom: 10px; }
         .competencia-links textarea {
           width: 100%; background: var(--panel-2); color: var(--text-primary);
