@@ -1143,9 +1143,49 @@ function costoEfectivo(p, cotizaciones) {
   });
   return { total: Math.round(total * 100) / 100, lineas };
 }
-function productoConCostoEfectivo(p, cotizaciones) {
+// ---------- Lotes: el costo en uso avanza con las ventas (primero entra, primero sale) ----------
+// Cada envío de Stock es un lote. El costo sale de su cotización vinculada (o de un costo manual).
+// Se arranca con un "saldo": en el lote más viejo que todavía tenés se carga cuántas unidades
+// quedan y a qué fecha. Desde esa fecha, cada venta (las ventas por día vienen de la sincronización
+// con Mercado Libre) resta unidades; cuando el lote se agota, el costo pasa al siguiente.
+// Los lotes marcados "ya no cuenta" se ignoran. Sin saldo cargado no hay modo lotes y todo sigue igual.
+function stockDeProducto(p, stockProductos) {
+  return (stockProductos || []).find(x => x.mlItemId && p.mlItemId && x.mlItemId === p.mlItemId) || null;
+}
+function costoDeLote(envio, cotizaciones) {
+  if (envio.cotizacionId) {
+    const c = (cotizaciones || []).find(x => x.id === envio.cotizacionId);
+    const x = c ? costoUnitarioCotizacion(c, '') : null;
+    if (x) return { valor: x.valor, definitivo: x.definitivo, fuente: 'cotización' };
+  }
+  if (envio.costoManual !== '' && envio.costoManual != null && !isNaN(envio.costoManual)) {
+    return { valor: Number(envio.costoManual), definitivo: true, fuente: 'manual' };
+  }
+  return null;
+}
+function costoPorLotes(sp, cotizaciones) {
+  const envios = sp && Array.isArray(sp.envios) ? sp.envios : [];
+  const activos = envios.filter(e => !e.noCuenta).sort((a, b) => (a.fechaPago || '').localeCompare(b.fechaPago || ''));
+  const i0 = activos.findIndex(e => e.saldoInicial !== '' && e.saldoInicial != null && !isNaN(e.saldoInicial) && e.fechaSaldo);
+  if (i0 < 0) return null;
+  const corte = activos[i0].fechaSaldo;
+  const lotes = activos.slice(i0).map((e, i) => ({ envio: e, n: i + 1, unidades: i === 0 ? Number(e.saldoInicial) : (Number(e.cantidad) || 0) }));
+  const vendidas = (sp.ventasDiarias || []).filter(d => d.fecha > corte).reduce((t, d) => t + (Number(d.unidades) || 0), 0);
+  let resto = vendidas, enUso = null;
+  for (const l of lotes) {
+    if (resto < l.unidades) { enUso = { ...l, quedan: l.unidades - resto }; break; }
+    resto -= l.unidades;
+  }
+  const agotado = !enUso;
+  if (!enUso) enUso = { ...lotes[lotes.length - 1], quedan: 0 };
+  return { corte, lotes, vendidas, enUso, agotado, costo: costoDeLote(enUso.envio, cotizaciones) };
+}
+function productoConCostoEfectivo(p, cotizaciones, stockProductos) {
   const ef = costoEfectivo(p, cotizaciones);
-  return ef ? { ...p, valorAdquisicion: ef.total } : p;
+  if (ef) return { ...p, valorAdquisicion: ef.total };
+  const lotes = costoPorLotes(stockDeProducto(p, stockProductos), cotizaciones);
+  if (lotes && lotes.costo) return { ...p, valorAdquisicion: Math.round(lotes.costo.valor * 100) / 100 };
+  return p;
 }
 function ComponentesCosto({ p, cotizaciones, ef, onUpdate }) {
   const h = React.createElement;
@@ -1217,14 +1257,17 @@ function ProductoCostoCard({
   tasasCuotas,
   onUpdateTasa,
   tcBelo,
-  cotizaciones
+  cotizaciones,
+  stockProductos
 }) {
   const [editandoTasas, setEditandoTasas] = useState(false);
   const [guardandoSku, setGuardandoSku] = useState(false);
   const [skuMsg, setSkuMsg] = useState('');
   const [skuError, setSkuError] = useState('');
   const ef = costoEfectivo(p, cotizaciones);
-  const r = calcularCosto(ef ? { ...p, valorAdquisicion: ef.total } : p, tasasCuotas);
+  const lotesInfo = ef ? null : costoPorLotes(stockDeProducto(p, stockProductos), cotizaciones);
+  const loteCosto = lotesInfo && lotesInfo.costo ? lotesInfo : null;
+  const r = calcularCosto(ef ? { ...p, valorAdquisicion: ef.total } : loteCosto ? { ...p, valorAdquisicion: Math.round(loteCosto.costo.valor * 100) / 100 } : p, tasasCuotas);
 
   const guardarSku = async () => {
     const sku = (p.sku || '').trim();
@@ -1299,12 +1342,19 @@ function ProductoCostoCard({
     label: "Valor de Adquisición (suma de componentes)",
     value: money(ef.total),
     highlight: true
+  }) : loteCosto ? /*#__PURE__*/React.createElement(CampoCalculado, {
+    label: "Valor de Adquisición (costo del lote en uso)",
+    value: money(loteCosto.costo.valor),
+    highlight: true
   }) : /*#__PURE__*/React.createElement(CampoInput, {
     label: "Valor de Adquisición (último lote)",
     prefix: "$",
     value: p.valorAdquisicion,
     onChange: v => onUpdate(p.id, 'valorAdquisicion', v)
-  })), /*#__PURE__*/React.createElement(CampoInput, {
+  })), loteCosto && /*#__PURE__*/React.createElement("div", { className: "lote-info" },
+    "Lote " + loteCosto.enUso.n + ": quedan " + loteCosto.enUso.quedan + " de " + loteCosto.enUso.unidades + " u · " +
+    (loteCosto.costo.definitivo ? "costo definitivo" : "costo estimado") +
+    (loteCosto.agotado ? " · lote agotado, falta cargar el siguiente" : "")), /*#__PURE__*/React.createElement(CampoInput, {
     label: "Costo Envío ML",
     prefix: "$",
     value: p.envioML,
@@ -1533,7 +1583,8 @@ function CostosPanel({
   productos,
   setProductos,
   seleccion,
-  cotizaciones
+  cotizaciones,
+  stockProductos
 }) {
   const updateField = (id, field, value) => {
     setProductos(prev => prev.map(p => p.id === id ? {
@@ -1724,7 +1775,7 @@ function CostosPanel({
     }
   };
 
-  const resultados = productos.map(p => calcularCosto(productoConCostoEfectivo(p, cotizaciones), tasasCuotas)).filter(r => r && !r.error);
+  const resultados = productos.map(p => calcularCosto(productoConCostoEfectivo(p, cotizaciones, stockProductos), tasasCuotas)).filter(r => r && !r.error);
   const margenProm = resultados.length ? resultados.reduce((s, r) => s + r.mgUtilidad, 0) / resultados.length : null;
   const roasPeor = resultados.length ? Math.max(...resultados.map(r => r.roasMinimo)) : null;
   const bajoUmbral = resultados.filter(r => r.mgUtilidad < 35).length;
@@ -1813,7 +1864,8 @@ function CostosPanel({
       tasasCuotas: tasasCuotas,
       onUpdateTasa: updateTasa,
       tcBelo: tcBelo,
-      cotizaciones: cotizaciones
+      cotizaciones: cotizaciones,
+      stockProductos: stockProductos
     }))), /*#__PURE__*/React.createElement("div", {
     className: "sub-block"
   }, /*#__PURE__*/React.createElement("h3", null, "Historial de lotes (por producto)"), /*#__PURE__*/React.createElement("div", {
@@ -3413,6 +3465,7 @@ function EnvioDetalle({ p, e, todos, cotizaciones, onUpdate, onLink }) {
   const [cotSel, setCotSel] = useState(e.cotizacionId || '');
   const [aviso, setAviso] = useState('');
   const otros = todos.filter(x => x.id !== p.id);
+  const costoLote = costoDeLote(e, cotizaciones);
   const cotOrdenadas = [...(cotizaciones || [])].sort((a, b) =>
     (b.destinoMl === p.mlItemId ? 1 : 0) - (a.destinoMl === p.mlItemId ? 1 : 0));
 
@@ -3469,7 +3522,7 @@ function EnvioDetalle({ p, e, todos, cotizaciones, onUpdate, onLink }) {
         h('label', { className: 'cotiz-field' },
           h('span', { className: 'calc-field-label' }, 'Cotización de Investigación'),
           h('div', { className: 'calc-field-input' },
-            h('select', { value: cotSel, onChange: ev => { setCotSel(ev.target.value); setAviso(''); } },
+            h('select', { value: cotSel, onChange: ev => { setCotSel(ev.target.value); setAviso(''); onUpdate('cotizacionId', ev.target.value); } },
               h('option', { value: '' }, '— elegir —'),
               cotOrdenadas.map(c => h('option', { key: c.id, value: c.id },
                 (c.destinoMl === p.mlItemId ? '★ ' : '') + (c.producto || 'Sin nombre').slice(0, 30) + ' · ' + (c.proveedor || 's/proveedor') + ' · pago ' + (c.defFechaPago || 's/f')))))),
@@ -3477,6 +3530,32 @@ function EnvioDetalle({ p, e, todos, cotizaciones, onUpdate, onLink }) {
           h('span', { className: 'calc-field-label' }, ' '),
           h('button', { type: 'button', className: 'add-btn', onClick: traerDeCotizacion }, 'Traer fecha de pago'))),
       aviso && h('div', { className: 'data-note', style: { marginTop: 6, marginBottom: 0 } }, aviso)),
+
+    h('div', { className: 'envio-detalle-bloque' },
+      h('h4', null, 'Lote y costo'),
+      h('div', { className: 'cotiz-fields-grid' },
+        h('label', { className: 'cotiz-field' },
+          h('span', { className: 'calc-field-label' }, 'Unidades que quedan de este lote'),
+          h('div', { className: 'calc-field-input' },
+            h('input', { type: 'number', value: e.saldoInicial == null ? '' : e.saldoInicial, placeholder: '—', onChange: ev => onUpdate('saldoInicial', ev.target.value) }))),
+        h('label', { className: 'cotiz-field' },
+          h('span', { className: 'calc-field-label' }, 'Al (fecha del conteo)'),
+          h('div', { className: 'calc-field-input' },
+            h('input', { type: 'date', value: e.fechaSaldo || '', onChange: ev => onUpdate('fechaSaldo', ev.target.value) }))),
+        h('label', { className: 'cotiz-field' },
+          h('span', { className: 'calc-field-label' }, 'Costo manual (si no hay cotización)'),
+          h('div', { className: 'calc-field-input' }, h('span', { className: 'cell-prefix' }, '$'),
+            h('input', { type: 'number', value: e.costoManual == null ? '' : e.costoManual, placeholder: '—', onChange: ev => onUpdate('costoManual', ev.target.value) }))),
+        h('label', { className: 'cotiz-field' },
+          h('span', { className: 'calc-field-label' }, 'Este lote'),
+          h('div', { className: 'calc-field-input' },
+            h('select', { value: e.noCuenta ? 'no' : 'si', onChange: ev => onUpdate('noCuenta', ev.target.value === 'no') },
+              h('option', { value: 'si' }, 'Cuenta para el costo'),
+              h('option', { value: 'no' }, 'Ya no cuenta (agotado)'))))),
+      costoLote
+        ? h('div', { className: 'data-note', style: { marginTop: 6, marginBottom: 0 } }, 'Costo unitario de este lote: ' + money(costoLote.valor) + ' (' + (costoLote.definitivo ? 'definitivo' : 'estimado') + ', ' + costoLote.fuente + ').')
+        : h('div', { className: 'sub-empty' }, 'Este lote no tiene costo: elegí una cotización arriba o cargá un costo manual.'),
+      h('div', { className: 'data-note', style: { marginTop: 6, marginBottom: 0 } }, 'Cargá "unidades que quedan" y la fecha en el lote más viejo que todavía tenés. Desde esa fecha cada venta de Mercado Libre le resta unidades y, cuando se agota, el costo de Costos pasa al lote siguiente. Para traer las ventas, sincronizá Stock con Mercado Libre.')),
 
     h('div', { className: 'envio-detalle-bloque' },
       h('h4', null, 'Tramo internacional'),
@@ -3591,6 +3670,7 @@ function StockPanel({
               stockFull: pub.stock_disponible != null ? pub.stock_disponible : viejo.stockFull,
               vendidasFull: v ? (v.unidades_vendidas_full || 0) : viejo.vendidasFull,
               vendidasPropias: v ? (v.unidades_vendidas_propias || 0) : viejo.vendidasPropias,
+              ventasDiarias: v ? (v.diarias || []).map(d => ({ fecha: d.fecha, unidades: d.unidades })) : (viejo.ventasDiarias || []),
               ventasSemanales: []
             };
             actualizados++;
@@ -3606,6 +3686,7 @@ function StockPanel({
               stockFull: pub.stock_disponible != null ? pub.stock_disponible : 0,
               vendidasFull: v ? (v.unidades_vendidas_full || 0) : 0,
               vendidasPropias: v ? (v.unidades_vendidas_propias || 0) : 0,
+              ventasDiarias: v ? (v.diarias || []).map(d => ({ fecha: d.fecha, unidades: d.unidades })) : [],
               stockFisicoBase: '',
               fechaConteoBase: hoy
             });
@@ -5454,12 +5535,13 @@ function ModulePanel({
   elegir
 }) {
   // Costos edita los datos crudos; el resto de los módulos lee el costo ya sumado.
-  const productosCosto = React.useMemo(() => productos.map(p => productoConCostoEfectivo(p, cotizaciones)), [productos, cotizaciones]);
+  const productosCosto = React.useMemo(() => productos.map(p => productoConCostoEfectivo(p, cotizaciones, stockProductos)), [productos, cotizaciones, stockProductos]);
   if (moduleId === 'costos') return /*#__PURE__*/React.createElement(CostosPanel, {
     productos: productos,
     setProductos: setProductos,
     seleccion: sel.costos,
-    cotizaciones: cotizaciones
+    cotizaciones: cotizaciones,
+    stockProductos: stockProductos
   });
   if (moduleId === 'evolucion') return /*#__PURE__*/React.createElement(EvolucionPanel, null);
   if (moduleId === 'investigacion') return /*#__PURE__*/React.createElement(InvestigacionPanel, {
@@ -5856,7 +5938,7 @@ function JopexPanel() {
   }, [menuAbierto]);
 
   // Submenús del menú lateral
-  const subCostos = productos.map(p => productoConCostoEfectivo(p, cotizaciones)).map(p => ({
+  const subCostos = productos.map(p => productoConCostoEfectivo(p, cotizaciones, stockProductos)).map(p => ({
     id: p.id,
     label: (p.apodo || p.nombre || '(sin nombre)').slice(0, 34),
     alerta: (() => { const r = calcularCosto(p); return r && !r.error && r.promo && r.promo.margenRealPromo < 0; })()
@@ -6599,6 +6681,7 @@ function JopexPanel() {
           margin-bottom: 6px;
         }
         .stock-detalle-header .stock-producto-title { margin-bottom: 0; }
+        .lote-info { font-size: 12px; color: var(--text-secondary); margin: -2px 0 8px; }
         .componentes-block { margin: 0 0 14px; padding: 12px 14px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-soft); border-radius: 10px; }
         .componentes-block h4 { margin: 0 0 10px; font-size: 12.5px; color: var(--blue-glow); }
         .componentes-vacio { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; font-size: 12.5px; color: var(--text-secondary); }
