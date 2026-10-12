@@ -441,6 +441,8 @@ const Calculator = props => /*#__PURE__*/React.createElement(Icon, props, /*#__P
    /*#__PURE__*/React.createElement("path", { d: "M8 14h.01" }),
    /*#__PURE__*/React.createElement("path", { d: "M12 18h.01" }),
    /*#__PURE__*/React.createElement("path", { d: "M8 18h.01" }));
+const Copy = props => React.createElement(Icon, props, React.createElement("rect", { x: "9", y: "9", width: "13", height: "13", rx: "2", ry: "2" }),
+  React.createElement("path", { d: "M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" }));
 const Trash2 = props => /*#__PURE__*/React.createElement(Icon, props, /*#__PURE__*/React.createElement("polyline", {
   points: "3 6 5 6 21 6"
 }), /*#__PURE__*/React.createElement("path", {
@@ -1258,7 +1260,8 @@ function ProductoCostoCard({
   onUpdateTasa,
   tcBelo,
   cotizaciones,
-  stockProductos
+  stockProductos,
+  onDuplicate
 }) {
   const [editandoTasas, setEditandoTasas] = useState(false);
   const [guardandoSku, setGuardandoSku] = useState(false);
@@ -1310,14 +1313,22 @@ function ProductoCostoCard({
     value: p.nombre,
     onChange: e => onUpdate(p.id, 'nombre', e.target.value),
     placeholder: "Título real de la publicación"
-  })), /*#__PURE__*/React.createElement("button", {
+  })), /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 4 } },
+  onDuplicate && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "icon-btn",
+    title: "Duplicar SKU (copia las piezas y los datos de venta)",
+    onClick: () => onDuplicate(p.id),
+    "aria-label": "Duplicar SKU"
+  }, /*#__PURE__*/React.createElement(Copy, { size: 15 })),
+  /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "icon-btn",
     onClick: () => onRemove(p.id),
     "aria-label": "Eliminar producto"
   }, /*#__PURE__*/React.createElement(Trash2, {
     size: 15
-  }))),
+  })))),
   /*#__PURE__*/React.createElement("div", { className: "sku-fila" },
     p.mlItemId
       ? /*#__PURE__*/React.createElement(React.Fragment, null,
@@ -1610,6 +1621,26 @@ function CostosPanel({
   const removeProducto = id => {
     setProductos(prev => prev.filter(p => p.id !== id));
   };
+  // Duplicar SKU: copia la tarjeta con sus componentes (ids nuevos) pero sin vínculo a una
+  // publicación de ML ni SKU, así se arma una variante cambiando solo el nombre y las piezas.
+  const duplicarProducto = id => {
+    setProductos(prev => {
+      const i = prev.findIndex(p => p.id === id);
+      if (i < 0) return prev;
+      const o = prev[i];
+      const base = Date.now();
+      const copia = {
+        ...o,
+        id: `p${base}`,
+        mlItemId: undefined, sku: '',
+        nombre: (o.nombre || '').trim() ? o.nombre.trim() + ' (copia)' : '',
+        apodo: (o.apodo || '').trim() ? o.apodo.trim() + ' (copia)' : '',
+        componentes: Array.isArray(o.componentes) ? o.componentes.map((k, j) => ({ ...k, id: `k${base}${j}` })) : o.componentes
+      };
+      delete copia.mlItemId;
+      return [...prev.slice(0, i + 1), copia, ...prev.slice(i + 1)];
+    });
+  };
 
   // ---------- NUEVO: sincronización con Mercado Libre ----------
   // Trae de ML lo que antes cargabas a mano: cargo por venta, financiación,
@@ -1850,7 +1881,7 @@ function CostosPanel({
     onClick: addProducto
   }, /*#__PURE__*/React.createElement(Plus, {
     size: 16
-  }), "Agregar producto"))),
+  }), "Nuevo SKU"))),
   syncMsg && /*#__PURE__*/React.createElement("div", { className: "sync-ok" }, syncMsg),
   syncError && /*#__PURE__*/React.createElement("div", { className: "competencia-error" }, syncError),
   /*#__PURE__*/React.createElement("div", {
@@ -1861,6 +1892,7 @@ function CostosPanel({
       p: p,
       onUpdate: updateField,
       onRemove: removeProducto,
+      onDuplicate: duplicarProducto,
       tasasCuotas: tasasCuotas,
       onUpdateTasa: updateTasa,
       tcBelo: tcBelo,
