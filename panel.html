@@ -1946,7 +1946,9 @@ function CostosPanel({
 //   Margen real ($)      = Acredita la pasarela − Costo             [DESPUÉS del costo]
 const PN_PLAZOS_DEFAULT = { '1': 6.09, '7': 4.39, '14': 3.49 };
 const PN_PLAZOS_LABEL = { '1': '1 día', '7': '7 días', '14': '14 días' };
-const PN_CUOTAS_DEFAULT = { '2': 7.70, '3': 10.45, '6': 13.67, '9': 18.36, '12': 22.00 };
+const PN_CUOTAS_DEFAULT = { '2': 7.70, '3': 10.45, '6': 14.25, '9': 19.40, '12': 22.00 };
+// Monto mínimo de la compra para ofrecer cada cuota en Pago Nube (panel de Tiendanube; vacío = sin mínimo cargado).
+const PN_MINIMOS_DEFAULT = { '2': 35000, '3': '', '6': '', '9': '', '12': '' };
 const MP_PLAZOS_DEFAULT = { 'momento': 6.29, '10': 4.39, '18': 3.39 };
 const MP_PLAZOS_LABEL = { 'momento': 'En el momento', '10': '10 días', '18': '18 días' };
 const MP_CUOTAS_DEFAULT = { '3': 10.49, '6': 18.69, '9': 26.49, '12': 32.29 };
@@ -1969,7 +1971,7 @@ function calcularPasarela({ costo, margenPct, ivaPct, comisionBasePct, cptPct, f
 
 function TarjetaPasarela({
   nombre, colorClase, plazoLabel, plazoValue, plazoOpciones, onPlazo,
-  cuotasValue, cuotasOpciones, onCuotas, cptPct, onCpt, resultado
+  cuotasValue, cuotasOpciones, onCuotas, cptPct, onCpt, resultado, minimoCuota
 }) {
   const h = React.createElement;
   return h('div', { className: 'tn-pasarela ' + colorClase },
@@ -2000,6 +2002,8 @@ function TarjetaPasarela({
       : h(React.Fragment, null,
           h('div', { className: 'precio-hero' }, money(resultado.precio)),
           h('div', { className: 'tramo-nota' }, 'Precio sugerido para vender por ' + nombre),
+          Number(minimoCuota) > 0 && resultado.precio < Number(minimoCuota) && h('div', { className: 'data-note', style: { borderColor: 'var(--danger, #ef4444)', color: 'var(--danger, #ef4444)' } },
+            '⚠ Con este precio no podés ofrecer ' + cuotasValue + ' cuotas sin interés: ' + nombre + ' pide una compra mínima de ' + money(Number(minimoCuota)) + '. Elegí menos cuotas o subí el precio.'),
           h('div', { className: 'costo-out-grid' },
             h(CampoCalculado, { label: 'Comisión (c/IVA' + (onCpt ? ' + CPT' : '') + ')', value: pct(resultado.comision * 100) }),
             h(CampoCalculado, { label: 'Financiación cuotas (c/IVA)', value: pct(resultado.fin * 100) }),
@@ -2056,6 +2060,7 @@ function TarjetaTiendaNube({ tn, productos, onUpdate, onRemove, cfg }) {
           onPlazo: v => onUpdate(tn.id, 'pnPlazo', v),
           cuotasValue: tn.pnCuotas, cuotasOpciones: cfg.pnCuotas,
           onCuotas: v => onUpdate(tn.id, 'pnCuotas', v),
+          minimoCuota: (cfg.pnMinimos || {})[tn.pnCuotas],
           resultado: pn
         }),
         h(TarjetaPasarela, {
@@ -2093,7 +2098,7 @@ function TiendaNubePanel({ productos }) {
 
   const [cfg, setCfg] = useState(() => {
     const base = { ivaPct: 21, pnPlazos: { ...PN_PLAZOS_DEFAULT }, pnCuotas: { ...PN_CUOTAS_DEFAULT },
-      mpPlazos: { ...MP_PLAZOS_DEFAULT }, mpCuotas: { ...MP_CUOTAS_DEFAULT } };
+      mpPlazos: { ...MP_PLAZOS_DEFAULT }, mpCuotas: { ...MP_CUOTAS_DEFAULT }, pnMinimos: { ...PN_MINIMOS_DEFAULT } };
     try {
       const s = window.localStorage.getItem('jopex_tiendanube_cfg');
       if (!s) return base;
@@ -2103,7 +2108,8 @@ function TiendaNubePanel({ productos }) {
         pnPlazos: { ...base.pnPlazos, ...(g.pnPlazos || {}) },
         pnCuotas: { ...base.pnCuotas, ...(g.pnCuotas || {}) },
         mpPlazos: { ...base.mpPlazos, ...(g.mpPlazos || {}) },
-        mpCuotas: { ...base.mpCuotas, ...(g.mpCuotas || {}) }
+        mpCuotas: { ...base.mpCuotas, ...(g.mpCuotas || {}) },
+        pnMinimos: { ...base.pnMinimos, ...(g.pnMinimos || {}) }
       };
     } catch (e) { return base; }
   });
@@ -2150,6 +2156,14 @@ function TiendaNubePanel({ productos }) {
           }), ' %'))),
       columnaTasas('Pago Nube — plazo de acreditación', cfg.pnPlazos, PN_PLAZOS_LABEL, 'pnPlazos'),
       columnaTasas('Pago Nube — cuotas sin interés', cfg.pnCuotas, null, 'pnCuotas'),
+      h('div', { className: 'tn-tasas-col' },
+        h('h5', null, 'Pago Nube — compra mínima por cuota'),
+        Object.keys(cfg.pnMinimos).map(k => h('div', { className: 'tasas-editor-row', key: k },
+          h('span', null, k + ' cuotas'),
+          h('span', null, '$ ', h('input', {
+            type: 'number', step: '100', value: cfg.pnMinimos[k], placeholder: 'sin mínimo',
+            onChange: e => updateTasa('pnMinimos', k, e.target.value)
+          }))))),
       columnaTasas('Mercado Pago — plazo de acreditación', cfg.mpPlazos, MP_PLAZOS_LABEL, 'mpPlazos'),
       columnaTasas('Mercado Pago — cuotas sin interés', cfg.mpCuotas, null, 'mpCuotas'),
       h('p', { className: 'tasas-editor-hint' },
