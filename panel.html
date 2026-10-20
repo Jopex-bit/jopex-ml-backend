@@ -2651,8 +2651,8 @@ function CotizacionRow({
             onChange: e => onUpdate(c.id, 'destinoMl', e.target.value)
           },
             h('option', { value: '' }, '— Producto nuevo (sin publicar) —'),
-            (publicaciones || []).map(p => h('option', { key: p.id, value: p.id },
-              p.titulo.length > 60 ? p.titulo.slice(0, 60) + '…' : p.titulo)))),
+            (publicaciones || []).map(p => h('option', { key: p.id, value: p.id, title: p.titulo },
+              p.etiqueta || (p.titulo.length > 60 ? p.titulo.slice(0, 60) + '…' : p.titulo))))),
         h('button', {
           type: 'button', className: 'add-btn cotiz-enviar-btn',
           onClick: () => onSetEstado(c, estado === 'elegido' ? 'pendiente' : 'elegido', r, def, destino)
@@ -2986,6 +2986,13 @@ function InvestigacionPanel({
   });
   const [cargandoPubs, setCargandoPubs] = useState(false);
   const [pubsMsg, setPubsMsg] = useState('');
+  // En el selector "Mandar el costo a" cada publicación se muestra con el mismo nombre corto
+  // (apodo) que tiene en Costos, para reconocerla rápido; si no tiene apodo, el título de ML.
+  const publicacionesConNombreCostos = (publicaciones || []).map(pub => {
+    const prod = (productos || []).find(x => x.mlItemId === pub.id || x.id === 'ml' + pub.id);
+    const apodo = prod && (prod.apodo || '').trim();
+    return apodo ? { ...pub, etiqueta: apodo } : pub;
+  });
   const cargarPublicaciones = async () => {
     const cfg = leerCfgBackend();
     if (!cfg.url) { setPubsMsg('Configurá primero la URL del backend (botón "conexión").'); return; }
@@ -3212,7 +3219,7 @@ function InvestigacionPanel({
     c: c,
     onUpdate: updateField,
     onRemove: removeCotizacion,
-    publicaciones: publicaciones,
+    publicaciones: publicacionesConNombreCostos,
     expandido: expandedId === c.id,
     onToggle: () => setExpandidoPorGrupo(prev => ({ ...prev, [gKey]: expandedId === c.id ? null : c.id })),
     estado: estadoDe(c),
