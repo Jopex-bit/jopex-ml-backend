@@ -5975,13 +5975,20 @@ function JopexPanel() {
   const [sel, setSel] = useState({ costos: '', investigacion: '', stock: '' });
   const elegir = (mod, id) => setSel(p => ({ ...p, [mod]: id }));
 
-  // ---- Módulos plegables ----
-  // Cada módulo con submenú se abre y se cierra tocando su título, sin importar
-  // cuál estés viendo. Se recuerda cómo lo dejaste (solo en este dispositivo).
+  // ---- Módulos plegables (acordeón) ----
+  // Un solo módulo desplegado a la vez: al tocar el título de otro módulo, el que estaba
+  // abierto se pliega y se despliega el nuevo, en el mismo toque. Tocar el título del módulo
+  // en el que estás parado lo pliega o lo despliega. Se recuerda cómo lo dejaste (en este dispositivo).
   const [abiertos, setAbiertos] = useState(() => {
     try {
       const s = window.localStorage.getItem('jopex_menu_abiertos');
-      if (s) return JSON.parse(s);
+      if (s) {
+        // Si quedaron varios abiertos de la versión anterior, nos quedamos con uno solo.
+        const g = JSON.parse(s); const ids = Object.keys(g).filter(k => g[k]);
+        if (ids.length <= 1) return g;
+        const act = window.localStorage.getItem('jopex_active_module');
+        return { [ids.includes(act) ? act : ids[0]]: true };
+      }
     } catch (e) {}
     // La primera vez, abierto el módulo en el que estás parado.
     try { return { [window.localStorage.getItem('jopex_active_module') || 'costos']: true }; }
@@ -5990,7 +5997,11 @@ function JopexPanel() {
   React.useEffect(() => {
     try { window.localStorage.setItem('jopex_menu_abiertos', JSON.stringify(abiertos)); } catch (e) {}
   }, [abiertos]);
-  const alternarGrupo = (id) => setAbiertos(p => ({ ...p, [id]: !p[id] }));
+  const alternarGrupo = (id, yaEstabaAqui) => setAbiertos(p => {
+    // Ir a otro módulo: se abre ese y se pliegan todos los demás. En el mismo módulo: alterna.
+    if (!yaEstabaAqui) return { [id]: true };
+    return { [id]: !p[id] };
+  });
 
   // ---- Menú lateral: en pantalla grande se puede ocultar/mostrar (se recuerda en este navegador) ----
   const [menuColapsado, setMenuColapsado] = useState(() => {
@@ -7533,9 +7544,10 @@ function JopexPanel() {
         "aria-expanded": sub ? String(abierto) : undefined,
         onClick: () => {
           setActive(m.id);
-          // Con submenú: el mismo toque despliega o repliega. Sin submenú no hay
-          // nada que desplegar, así que en el celular cerramos el cajón.
-          if (sub) alternarGrupo(m.id); else cerrarSiChico();
+          // Con submenú: despliega este módulo y pliega el resto (o alterna si ya estabas acá).
+          // Sin submenú no hay nada que desplegar: se pliega todo y en el celular cerramos el cajón.
+          if (sub) alternarGrupo(m.id, active === m.id);
+          else { setAbiertos({}); cerrarSiChico(); }
         }
       }, /*#__PURE__*/React.createElement(Icon, { size: 18 }),
          /*#__PURE__*/React.createElement("span", { className: "nav-item-txt" }, m.label),
