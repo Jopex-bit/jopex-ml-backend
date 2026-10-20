@@ -5371,7 +5371,8 @@ function calcRapidaPrecioVacio() {
     cargoVenta: '',
     envioML: '',
     cuotas: '6',
-    mgUtilidad: ''
+    mgUtilidad: '',
+    unidadesPack: '1'
   };
 }
 
@@ -5481,8 +5482,12 @@ function CalculadoraRapidaPanel() {
     setFp(prev => ({ ...prev, categoria: id, cargoVenta: cat ? String(cat.comision) : prev.cargoVenta }));
   };
 
+  // Unidades que lleva la publicación (1 = unidad suelta; 2, 3... = pack). El costo del producto
+  // es el landed unitario por esa cantidad; el resto de la cascada (comisión, cuotas, margen) se
+  // calcula sobre el precio del pack completo.
+  const packN = Math.max(1, Math.floor(Number(fp.unidadesPack)) || 1);
   const rp = (r && !r.error) ? calcularCosto({
-    valorAdquisicion: r.precioLandedArs,
+    valorAdquisicion: r.precioLandedArs * packN,
     envioML: fp.envioML,
     cargoVenta: fp.cargoVenta,
     cuotas: fp.cuotas,
@@ -5554,11 +5559,15 @@ function CalculadoraRapidaPanel() {
               COMISIONES_ML_CATEGORIAS.map(c =>
                 h('option', { key: c.id, value: c.id }, c.label + ' — ' + c.comision + '%'))))),
         h(CampoInput, {
+          label: 'Unidades en la publicación (1 = suelta, 2 o 3 = pack)',
+          value: fp.unidadesPack, onChange: v => setP('unidadesPack', v)
+        }),
+        h(CampoInput, {
           label: '% Cargo por venta', prefix: '%',
           value: fp.cargoVenta, onChange: v => setP('cargoVenta', v)
         }),
         h(CampoInput, {
-          label: 'Costo Envío ML (al vender)', prefix: '$',
+          label: packN > 1 ? 'Costo Envío ML del pack (al vender)' : 'Costo Envío ML (al vender)', prefix: '$',
           value: fp.envioML, onChange: v => setP('envioML', v)
         }),
         h('label', { className: 'calc-field' },
@@ -5598,11 +5607,15 @@ function CalculadoraRapidaPanel() {
           }),
           h(CampoCalculado, { label: 'Financiamiento (' + (fp.cuotas === 'sin' ? 'sin cuotas' : fp.cuotas + ' cuotas') + ')', value: money(rp.financiamientoARS) }),
           h(CampoCalculado, { label: 'Envío al cliente', value: money(rp.envioCliente) }),
-          h(CampoCalculado, { label: 'Costo del producto (landed)', value: money(rp.costoProductoARS) }),
+          h(CampoCalculado, { label: packN > 1 ? 'Costo del producto (landed × ' + packN + ')' : 'Costo del producto (landed)', value: money(rp.costoProductoARS) }),
           h(CampoCalculado, { label: 'Depósito de Mercado Libre', value: money(rp.depositoML) }),
           h(CampoCalculado, { label: 'Ganancia s/costo producto', value: pct(rp.gananciaSobreCosto) }),
           h(CampoCalculado, { label: 'Margen real (%)', value: pct(rp.margenReal), highlight: true }),
-          h(CampoCalculado, { label: 'Margen real ($)', value: money(rp.reciboPorVenta), highlight: true })))));
+          h(CampoCalculado, { label: 'Margen real ($)', value: money(rp.reciboPorVenta), highlight: true }),
+          packN > 1 && h(CampoCalculado, { label: 'Precio por unidad (pack de ' + packN + ')', value: money(rp.precio / packN) }),
+          packN > 1 && h(CampoCalculado, { label: 'Margen real por unidad ($)', value: money(rp.reciboPorVenta / packN) })),
+        packN > 1 && h('div', { className: 'data-note', style: { marginTop: 10, marginBottom: 0 } },
+          'Pack de ' + packN + ' unidades: cargá en "Costo Envío ML del pack" lo que cobra Mercado Libre por enviar el pack completo (puede ser distinto al envío de 1 unidad). Todos los montos de arriba son del pack entero.'))));
 }
 
 function ModulePanel({
