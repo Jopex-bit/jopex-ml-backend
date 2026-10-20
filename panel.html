@@ -1261,6 +1261,54 @@ function ComponentesCosto({ p, cotizaciones, ef, onUpdate }) {
             h('span', { className: 'comp-total' }, 'Valor de Adquisición = suma de componentes: ', h('b', null, money(ef.total))))));
 }
 
+// ---------- Precio manual (redondeado) por publicación ----------
+// Partiendo de un precio elegido a mano (por ejemplo el sugerido redondeado hacia arriba), muestra
+// cuánto cobra ML, cuánto deposita y cuánto queda de margen real. Usa el costo, el envío, el % de
+// cargo y las cuotas de la propia tarjeta; el cargo fijo se resuelve según el precio ingresado.
+function PrecioManualBloque({ p, r, tasasCuotas, onUpdate, tcBelo }) {
+  const h = React.createElement;
+  const pm = Number(p.precioManual);
+  const hay = p.precioManual !== '' && p.precioManual != null && !isNaN(pm) && pm > 0;
+  const cargoPct = Number(p.cargoVenta) || 0;
+  const finPct = (p.cuotas || '6') === 'sin' ? 0 : (Number((tasasCuotas || TASAS_CUOTAS_DEFAULT)[p.cuotas || '6']) || 0);
+  let m = null;
+  if (hay) {
+    const fijo = cargoFijoDe(pm);
+    const comVar = pm * cargoPct / 100;
+    const fin = pm * finPct / 100;
+    const envio = r.envioCliente;
+    const deposito = pm - comVar - fijo - fin - envio;
+    const margen = deposito - r.costoProductoARS;
+    m = { fijo, comVar, fin, envio, deposito, margen, margenPct: margen / pm * 100 };
+  }
+  const objetivo = Number(p.mgUtilidad);
+  return h('div', { className: 'promo-block' },
+    h('h4', null, 'Precio manual (redondeado)'),
+    h('p', { className: 'lineas-hint' }, 'Poné el precio que querés publicar (por ejemplo el sugerido redondeado) y mirá cuánto te queda realmente.'),
+    h('div', { className: 'calc-manual-fila' },
+      h(CampoInput, { label: 'Precio de venta', prefix: '$', value: p.precioManual || '', onChange: v => onUpdate(p.id, 'precioManual', v) }),
+      h('button', { type: 'button', className: 'add-btn ghost-btn', onClick: () => onUpdate(p.id, 'precioManual', String(Math.ceil(r.precio))) }, 'Usar el sugerido')),
+    !m && h('div', { className: 'sub-empty' }, 'Ingresá un precio para ver el desglose.'),
+    m && h(React.Fragment, null,
+      h('div', { className: 'costo-out-grid' },
+        h(CampoCalculado, { label: 'Comisión variable (' + cargoPct + '%)', value: money(m.comVar) }),
+        h(CampoCalculado, { label: m.fijo > 0 ? 'Cargo fijo por venta' : 'Cargo fijo (no aplica)', value: m.fijo > 0 ? money(m.fijo) : '$0', highlight: m.fijo > 0 }),
+        h(CampoCalculado, { label: 'Financiamiento (' + ((p.cuotas || '6') === 'sin' ? 'sin cuotas' : (p.cuotas || '6') + ' cuotas') + ')', value: money(m.fin) }),
+        h(CampoCalculado, { label: 'Envío al cliente', value: money(m.envio) }),
+        h(CampoCalculado, { label: 'Costo del producto', value: money(r.costoProductoARS) }),
+        h(CampoCalculado, { label: 'Depósito de Mercado Libre', value: money(m.deposito), highlight: true }),
+        h(CampoCalculado, { label: 'Margen real (%)', value: pct(m.margenPct), highlight: true, danger: m.margen <= 0 }),
+        h(CampoCalculado, { label: 'Margen real por unidad ($)', value: money(m.margen), highlight: true, danger: m.margen <= 0 }),
+        tcBelo >= 100 && h(CampoCalculado, { label: 'Margen real por unidad (USD)', value: moneyUsd(m.margen / tcBelo), highlight: true, danger: m.margen <= 0 })),
+      !isNaN(objetivo) && objetivo > 0 && h('div', { className: 'tramo-nota' },
+        Math.abs(m.margenPct - objetivo) < 0.05
+          ? 'Justo en el margen que pediste (' + pct(objetivo) + ').'
+          : 'Frente al margen que pediste (' + pct(objetivo) + '): ' + (m.margenPct >= objetivo ? 'estás ' : 'quedás ') +
+            pct(Math.abs(m.margenPct - objetivo)) + (m.margenPct >= objetivo ? ' por encima.' : ' por debajo.')),
+      Math.abs(pm - r.precio) / r.precio > 0.3 && h('div', { className: 'data-note', style: { marginBottom: 0 } },
+        'Ojo: este precio está lejos del sugerido (' + money(r.precio) + '). Revisá que no sea un error de tipeo.')));
+}
+
 function ProductoCostoCard({
   p,
   onUpdate,
@@ -1477,7 +1525,8 @@ function ProductoCostoCard({
     label: "Margen real (USD)",
     value: tcBelo ? moneyUsd(r.reciboPorVenta / tcBelo) : '— (cargá el TC arriba)',
     highlight: !!tcBelo
-  }))))), r && !r.error && (() => {
+  }))))), r && !r.error && /*#__PURE__*/React.createElement(PrecioManualBloque, { p: p, r: r, tasasCuotas: tasasCuotas, onUpdate: onUpdate, tcBelo: tcBelo }),
+  r && !r.error && (() => {
     const h = React.createElement;
     const u = Number(p.unidadesProyectadas);
     const hayU = p.unidadesProyectadas !== '' && p.unidadesProyectadas != null && !isNaN(u) && u > 0;
