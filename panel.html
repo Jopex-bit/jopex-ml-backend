@@ -5372,7 +5372,8 @@ function calcRapidaPrecioVacio() {
     envioML: '',
     cuotas: '6',
     mgUtilidad: '',
-    unidadesPack: '1'
+    unidadesPack: '1',
+    precioManual: ''
   };
 }
 
@@ -5494,6 +5495,52 @@ function CalculadoraRapidaPanel() {
     mgUtilidad: fp.mgUtilidad
   }, tasasCuotas) : null;
 
+  // ---------- Precio manual (redondeado a mano) ----------
+  // Mismo desglose que el precio sugerido, pero partiendo de un precio que elegís vos (por ejemplo
+  // el sugerido redondeado hacia arriba): cuánto cobra ML, cuánto te deposita y cuánto te queda.
+  const pm = Number(fp.precioManual);
+  const hayPm = fp.precioManual !== '' && !isNaN(pm) && pm > 0;
+  let man = null;
+  if (hayPm && rp && !rp.error) {
+    const cargoPct = Number(fp.cargoVenta) || 0;
+    const finPct = fp.cuotas === 'sin' ? 0 : (Number(tasasCuotas[fp.cuotas]) || 0);
+    const envio = Number(fp.envioML) || 0;
+    const costo = rp.costoProductoARS;
+    const fijo = cargoFijoDe(pm);
+    const comVar = pm * cargoPct / 100;
+    const fin = pm * finPct / 100;
+    const deposito = pm - comVar - fijo - fin - envio;
+    const margen = deposito - costo;
+    man = { fijo, comVar, fin, envio, costo, deposito, margen, margenPct: margen / pm * 100 };
+  }
+  const tarjetaManual = h('div', { className: 'calc-manual-card' },
+    h('h4', null, 'Precio manual (redondeado)'),
+    h('p', { className: 'lineas-hint' }, 'Poné el precio que querés publicar (por ejemplo el sugerido redondeado) y mirá cuánto te queda realmente.'),
+    h('div', { className: 'calc-manual-fila' },
+      h(CampoInput, { label: 'Precio de venta' + (packN > 1 ? ' del pack' : ''), prefix: '$', value: fp.precioManual, onChange: v => setP('precioManual', v) }),
+      h('button', { type: 'button', className: 'add-btn ghost-btn', onClick: () => setP('precioManual', String(Math.ceil(rp.precio))) }, 'Usar el sugerido')),
+    !man && h('div', { className: 'sub-empty' }, 'Ingresá un precio para ver el desglose.'),
+    man && h(React.Fragment, null,
+      h('div', { className: 'costo-out-grid' },
+        h(CampoCalculado, { label: 'Comisión variable (' + (Number(fp.cargoVenta) || 0) + '%)', value: money(man.comVar) }),
+        h(CampoCalculado, { label: man.fijo > 0 ? 'Cargo fijo por venta' : 'Cargo fijo (no aplica)', value: man.fijo > 0 ? money(man.fijo) : '$0', highlight: man.fijo > 0 }),
+        h(CampoCalculado, { label: 'Financiamiento (' + (fp.cuotas === 'sin' ? 'sin cuotas' : fp.cuotas + ' cuotas') + ')', value: money(man.fin) }),
+        h(CampoCalculado, { label: packN > 1 ? 'Envío del pack' : 'Envío al cliente', value: money(man.envio) }),
+        h(CampoCalculado, { label: packN > 1 ? 'Costo del producto (landed × ' + packN + ')' : 'Costo del producto (landed)', value: money(man.costo) }),
+        h(CampoCalculado, { label: 'Depósito de Mercado Libre', value: money(man.deposito), highlight: true }),
+        h(CampoCalculado, { label: 'Margen real (%)', value: pct(man.margenPct), highlight: true, danger: man.margen <= 0 }),
+        h(CampoCalculado, { label: 'Margen real ($)', value: money(man.margen), highlight: true, danger: man.margen <= 0 }),
+        h(CampoCalculado, { label: 'Margen real por unidad ($)', value: money(man.margen / packN), highlight: true, danger: man.margen <= 0 }),
+        packN > 1 && h(CampoCalculado, { label: 'Precio por unidad', value: money(pm / packN) })),
+      h('div', { className: 'tramo-nota' },
+        Math.abs(man.margenPct - Number(fp.mgUtilidad)) < 0.05
+          ? 'Justo en el margen que pediste (' + pct(Number(fp.mgUtilidad)) + ').'
+          : 'Frente al margen que pediste (' + pct(Number(fp.mgUtilidad)) + '): ' +
+            (man.margenPct >= Number(fp.mgUtilidad) ? 'estás ' : 'quedás ') + pct(Math.abs(man.margenPct - Number(fp.mgUtilidad))) +
+            (man.margenPct >= Number(fp.mgUtilidad) ? ' por encima.' : ' por debajo.')),
+      Math.abs(pm - rp.precio) / rp.precio > 0.3 && h('div', { className: 'data-note', style: { marginBottom: 0 } },
+        'Ojo: este precio está lejos del sugerido (' + money(rp.precio) + '). Revisá que no sea un error de tipeo.')));
+
   return h('div', { className: 'module-panel' },
     h('div', { className: 'module-header' },
       h('h1', null, 'Calculadora de Costo Rápido'),
@@ -5590,7 +5637,8 @@ function CalculadoraRapidaPanel() {
 
       rp && rp.error && h('div', { className: 'data-note', style: { marginBottom: 0 } }, rp.error),
 
-      rp && !rp.error && h(React.Fragment, null,
+      rp && !rp.error && h('div', { className: 'calc-dos-col' },
+      h('div', { className: 'calc-col-sugerido' }, h(React.Fragment, null,
         h('div', { className: 'precio-hero' }, money(rp.precio)),
         h('div', { className: 'tramo-nota' },
           rp.cargoFijo > 0
@@ -5615,7 +5663,8 @@ function CalculadoraRapidaPanel() {
           packN > 1 && h(CampoCalculado, { label: 'Precio por unidad (pack de ' + packN + ')', value: money(rp.precio / packN) }),
           packN > 1 && h(CampoCalculado, { label: 'Margen real por unidad ($)', value: money(rp.reciboPorVenta / packN) })),
         packN > 1 && h('div', { className: 'data-note', style: { marginTop: 10, marginBottom: 0 } },
-          'Pack de ' + packN + ' unidades: cargá en "Costo Envío ML del pack" lo que cobra Mercado Libre por enviar el pack completo (puede ser distinto al envío de 1 unidad). Todos los montos de arriba son del pack entero.'))));
+          'Pack de ' + packN + ' unidades: cargá en "Costo Envío ML del pack" lo que cobra Mercado Libre por enviar el pack completo (puede ser distinto al envío de 1 unidad). Todos los montos de arriba son del pack entero.'))),
+      h('div', { className: 'calc-col-manual' }, tarjetaManual))));
 }
 
 function ModulePanel({
@@ -6467,6 +6516,12 @@ function JopexPanel() {
         .ver-detalle-btn:hover { background: rgba(61, 220, 60, 0.16); }
         .tn-producto-select { width: 100%; margin-right: 10px; }
         .tn-producto-select select { width: 100%; }
+        .calc-dos-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+        .calc-manual-card { border: 1px solid var(--border-soft); border-radius: 10px; padding: 14px 16px; background: var(--panel-2, transparent); }
+        .calc-manual-card h4 { margin: 0 0 4px; }
+        .calc-manual-fila { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px; }
+        .calc-manual-fila .calc-field { flex: 1 1 160px; }
+        @media (max-width: 900px) { .calc-dos-col { grid-template-columns: 1fr; } }
         .tn-costo-margen {
           display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
           margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px dashed var(--border-soft);
