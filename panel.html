@@ -1348,6 +1348,20 @@ function agruparPorSku(productos) {
   });
   return grupos;
 }
+// Familia: agrupa en el menú varios SKU que son el mismo producto con distintos ángulos de venta.
+// Se guarda en cada publicación (campo 'familia'); es solo para navegar, el costo sigue siendo por SKU.
+function familiaDe(g) {
+  const m = g.miembros.find(x => (x.familia || '').trim());
+  return m ? m.familia.trim() : '';
+}
+// Qué grupos (SKU) se muestran al elegir un ítem del menú: el SKU solo, o toda su familia.
+function gruposVisibles(grupos, seleccion) {
+  if (!seleccion) return grupos;
+  const sel = grupos.find(g => g.miembros.some(m => m.id === seleccion));
+  if (!sel) return [];
+  const fam = familiaDe(sel);
+  return fam ? grupos.filter(g => familiaDe(g) === fam) : [sel];
+}
 // Lo que queda con un precio de venta dado (el cargo fijo de ML se resuelve según ese precio).
 function margenConPrecio(precio, p, costo, tasasCuotas) {
   const cu = p.cuotas || '6';
@@ -1413,7 +1427,7 @@ function PrecioManualBloque({ p, r, tasasCuotas, onUpdate, tcBelo }) {
 // El costo, el envío, el % de cargo y el margen deseado se cargan una sola vez y se escriben en todas
 // las publicaciones del SKU. Debajo, una fila por condición de venta con el precio sugerido, el precio
 // publicado en Mercado Libre y lo que queda de margen real en cada caso.
-function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate, tasasCuotas, onUpdateTasa, tcBelo, cotizaciones, stockProductos }) {
+function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate, tasasCuotas, onUpdateTasa, tcBelo, cotizaciones, stockProductos, familias, tamFamilia, onCopiarFamilia }) {
   const h = React.createElement;
   const [abierta, setAbierta] = useState('');
   // Lo compartido (costo, envío, cargo, margen) se lee de la primera publicación que lo tenga cargado.
@@ -1453,7 +1467,21 @@ function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate
       h('div', { className: 'costo-card-titulos' },
         h('h3', { className: 'costo-card-title costo-card-sku' }, g.sku),
         h('div', { className: 'costo-card-subtitulo', style: { border: 'none' } },
-          g.miembros.length + ' publicaciones' + (tres ? ' · contado, 3 y 6 cuotas' : '')))),
+          g.miembros.length + ' publicaciones' + (tres ? ' · contado, 3 y 6 cuotas' : ''))),
+      h('div', { className: 'grupo-familia' },
+        h('label', { className: 'calc-field' },
+          h('span', { className: 'calc-field-label' }, 'Familia (opcional)'),
+          h('div', { className: 'calc-field-input' },
+            h('input', {
+              type: 'text', list: 'familias-costos', value: familiaDe(g), placeholder: 'ej: MAG TAG MOTOS',
+              onChange: e => onUpdateGrupo('familia', e.target.value)
+            }))),
+        tamFamilia > 1 && onCopiarFamilia && h('button', {
+          type: 'button', className: 'add-btn ghost-btn',
+          title: 'Copia el costo y el margen deseado de este SKU a los demás SKU de la familia',
+          onClick: () => { if (window.confirm('¿Copiar el costo y el margen de ' + g.sku + ' a los otros ' + (tamFamilia - 1) + ' SKU de la familia? Se pisan los que tengan cargados.')) onCopiarFamilia({ componentes: prim.componentes, valorAdquisicion: prim.valorAdquisicion, mgUtilidad: prim.mgUtilidad }); }
+        }, 'Copiar costo a la familia (' + tamFamilia + ' SKU)')),
+      h('datalist', { id: 'familias-costos' }, (familias || []).map(f => h('option', { key: f, value: f })))),
     h(ComponentesCosto, { p: prim, cotizaciones: cotizaciones, ef: ef, onUpdate: (id, campo, valor) => onUpdateGrupo(campo, valor) }),
     h('div', { className: 'costo-card-body grupo-sku-body' },
       h('div', { className: 'costo-block' },
@@ -1882,6 +1910,19 @@ function CostosPanel({
   const removeProducto = id => {
     setProductos(prev => prev.filter(p => p.id !== id));
   };
+  // Copia costo y margen de un SKU a todos los demás SKU de su familia.
+  const copiarAFamilia = (g, valores) => {
+    const fam = familiaDe(g);
+    if (!fam) return;
+    const destino = agruparPorSku(productos).filter(x => x !== g && x.clave !== g.clave && familiaDe(x) === fam);
+    const ids = destino.flatMap(x => x.miembros.map(m => m.id));
+    setProductos(prev => prev.map(p => ids.includes(p.id) ? {
+      ...p,
+      valorAdquisicion: valores.valorAdquisicion,
+      mgUtilidad: valores.mgUtilidad,
+      componentes: Array.isArray(valores.componentes) ? valores.componentes.map((k, j) => ({ ...k, id: 'k' + Date.now() + p.id.slice(-3) + j })) : valores.componentes
+    } : p));
+  };
   // Un campo compartido del SKU se escribe en todas sus publicaciones.
   const updateGrupo = (g, field, value) => {
     const ids = g.miembros.map(m => m.id);
@@ -2053,7 +2094,7 @@ function CostosPanel({
         // Las publicaciones nuevas de un SKU que ya tiene costo cargado heredan lo compartido
         // (costo, componentes y margen deseado) de su hermana; solo se completan campos vacíos.
         const vacio = v => v === '' || v == null || (Array.isArray(v) && !v.length);
-        const COMPARTIDOS = ['valorAdquisicion', 'componentes', 'mgUtilidad'];
+        const COMPARTIDOS = ['valorAdquisicion', 'componentes', 'mgUtilidad', 'familia'];
         const donantes = {};
         copia.forEach(p => {
           const k = skuClave(p);
@@ -2186,10 +2227,13 @@ function CostosPanel({
   syncError && /*#__PURE__*/React.createElement("div", { className: "competencia-error" }, syncError),
   /*#__PURE__*/React.createElement("div", {
     className: "costo-cards-grid"
-  }, agruparPorSku(productos).filter(g => !seleccion || g.miembros.some(m => m.id === seleccion)).map(g => g.miembros.length > 1
+  }, gruposVisibles(agruparPorSku(productos), seleccion).map(g => g.miembros.length > 1
     ? /*#__PURE__*/React.createElement(GrupoSkuCard, {
       key: 'sku-' + g.clave,
       g: g,
+      familias: Array.from(new Set(productos.map(p => (p.familia || '').trim()).filter(Boolean))).sort(),
+      tamFamilia: familiaDe(g) ? agruparPorSku(productos).filter(x => familiaDe(x) === familiaDe(g)).length : 0,
+      onCopiarFamilia: valores => copiarAFamilia(g, valores),
       onUpdateGrupo: (campo, valor) => updateGrupo(g, campo, valor),
       onUpdateMiembro: updateField,
       onRemove: removeProducto,
@@ -6397,11 +6441,20 @@ function JopexPanel() {
   }, [menuAbierto]);
 
   // Submenús del menú lateral
-  const subCostos = agruparPorSku(conHermanos(productos).map(p => productoConCostoEfectivo(p, cotizaciones, stockProductos))).map(g => ({
-    id: g.id,
-    label: nombreCorto(g.miembros[0]).slice(0, 34),
-    alerta: g.miembros.some(p => { const r = calcularCosto(p); return r && !r.error && r.promo && r.promo.margenRealPromo < 0; })
-  }));
+  const subCostos = (() => {
+    const gruposCosto = agruparPorSku(conHermanos(productos).map(p => productoConCostoEfectivo(p, cotizaciones, stockProductos)));
+    const alertaDe = g => g.miembros.some(p => { const r = calcularCosto(p); return r && !r.error && r.promo && r.promo.margenRealPromo < 0; });
+    const items = [];
+    const porFamilia = {};
+    gruposCosto.forEach(g => {
+      const fam = familiaDe(g);
+      if (!fam) { items.push({ id: g.id, label: nombreCorto(g.miembros[0]).slice(0, 34), alerta: alertaDe(g) }); return; }
+      if (porFamilia[fam]) { porFamilia[fam].alerta = porFamilia[fam].alerta || alertaDe(g); porFamilia[fam].n++; porFamilia[fam].label = fam.slice(0, 28) + ' · ' + porFamilia[fam].n + ' SKU'; return; }
+      porFamilia[fam] = { id: g.id, label: fam.slice(0, 28) + ' · 1 SKU', alerta: alertaDe(g), n: 1 };
+      items.push(porFamilia[fam]);
+    });
+    return items;
+  })();
   const subStock = stockProductos.map(p => {
     const r = calcularModeloStock(p);
     return {
@@ -6769,6 +6822,8 @@ function JopexPanel() {
           border-radius: 10px; padding: 10px 14px; margin-bottom: 18px;
         }
         .grupo-sku-card { grid-column: 1 / -1; }
+        .grupo-familia { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin-left: auto; }
+        .grupo-familia .calc-field { min-width: 190px; }
         .grupo-sku-body { grid-template-columns: 1fr 1fr; }
         .grupo-tabla-wrap { overflow-x: auto; }
         .grupo-tabla { width: 100%; border-collapse: collapse; font-size: 13px; }
