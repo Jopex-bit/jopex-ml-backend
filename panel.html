@@ -948,7 +948,9 @@ const TRAMOS_CARGO_FIJO = [
 // La API de ML (financing_add_on_fee) devuelve un solo % sin decir a qué plan
 // de cuotas corresponde. En vez de adivinar, el usuario mantiene esta tabla
 // editable desde el panel (arranca con la tarifa vigente al 02/09/2026).
-const TASAS_CUOTAS_DEFAULT = { '3': 8.90, '6': 13.40, '9': 17.80, '12': 21.60 };
+// 3 y 6 cuotas: lo que cobra Mercado Libre (verificado en su pantalla de promociones: 8,5% y 12,9%).
+// 9 y 12 cuotas: sin dato verificado todavía, se dejan como estaban.
+const TASAS_CUOTAS_DEFAULT = { '3': 8.50, '6': 12.90, '9': 17.80, '12': 21.60 };
 function cargoFijoDe(precio) {
   const t = TRAMOS_CARGO_FIJO.find(t => precio >= t.desde && precio <= t.hasta);
   return t ? t.fijo : 0;

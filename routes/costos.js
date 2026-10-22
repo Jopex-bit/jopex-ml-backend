@@ -20,6 +20,7 @@ const axios = require('axios');
 // Parámetros opcionales:
 //   ?limit=50   cuántas publicaciones traer (por defecto 50)
 //   ?item=MLA1  analizar una sola publicación
+//   ?debug=1    agrega promos_raw: las promociones tal como las devuelve ML (para diagnóstico)
 // ---------------------------------------------------------------------------
 
 module.exports = (app) => {
@@ -170,6 +171,8 @@ module.exports = (app) => {
             params: { app_version: 'v2' },
           });
           const lista = Array.isArray(r.data) ? r.data : r.data?.results || [];
+          // Diagnóstico (solo lectura): con ?debug=1 se devuelve la lista cruda de promociones de ML.
+          if (req.query.debug === '1') { p.promos_raw = lista; p.user_product_id = b.user_product_id || null; }
 
           const pct = (orig, promo) =>
             orig > 0 && promo > 0 ? Number((((orig - promo) / orig) * 100).toFixed(2)) : null;
