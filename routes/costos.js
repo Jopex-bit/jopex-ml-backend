@@ -101,6 +101,8 @@ module.exports = (app) => {
           ml_item_id: b.id,
           titulo: b.title,
           sku: skuDe(b.attributes),
+          // Foto principal de la publicación (para la miniatura en el panel).
+          foto: (b.pictures && b.pictures[0] && (b.pictures[0].secure_url || b.pictures[0].url)) || b.secure_thumbnail || b.thumbnail || null,
           precio: b.price,
           categoria: b.category_id,
           listing_type_id: b.listing_type_id,

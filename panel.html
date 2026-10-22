@@ -1261,6 +1261,23 @@ function ComponentesCosto({ p, cotizaciones, ef, onUpdate }) {
             h('span', { className: 'comp-total' }, 'Valor de Adquisición = suma de componentes: ', h('b', null, money(ef.total))))));
 }
 
+// ---------- Nombre y foto de cada producto ----------
+// El nombre que se ve en Costos (tarjeta, menú) y en los selectores es el SKU de la publicación;
+// si todavía no tiene SKU, el apodo y, en último caso, el título de Mercado Libre.
+function nombreCorto(p) {
+  return ((p && p.sku) || '').trim() || ((p && p.apodo) || '').trim() || (p && p.nombre) || '(sin nombre)';
+}
+// Foto principal de la publicación, en miniatura (se guarda al sincronizar con Mercado Libre).
+function Miniatura({ p, size }) {
+  const [falla, setFalla] = useState(false);
+  const px = size || 44;
+  if (!p || !p.foto || falla) return null;
+  return React.createElement("img", {
+    src: p.foto, alt: '', loading: 'lazy', onError: () => setFalla(true),
+    style: { width: px, height: px, objectFit: 'cover', borderRadius: 8, flex: '0 0 auto', border: '1px solid var(--border-soft)', background: '#fff' }
+  });
+}
+
 // ---------- Tipo de cambio: validación ----------
 // Un tipo de cambio menor a 100 no es válido (el USDT está en miles de pesos): es casi seguro un
 // tipeo a medio escribir, y dividir por él da márgenes en USD engañosos. Un valor guardado inválido
@@ -1394,9 +1411,11 @@ function ProductoCostoCard({
     className: "costo-card"
   }, /*#__PURE__*/React.createElement("div", {
     className: "costo-card-header"
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement(Miniatura, { p: p, size: 56 }), /*#__PURE__*/React.createElement("div", {
     className: "costo-card-titulos"
-  }, /*#__PURE__*/React.createElement("input", {
+  }, (p.sku || '').trim()
+    ? /*#__PURE__*/React.createElement("h3", { className: "costo-card-title costo-card-sku" }, p.sku.trim())
+    : /*#__PURE__*/React.createElement("input", {
     type: "text",
     className: "costo-card-title",
     value: p.apodo || '',
@@ -1842,7 +1861,8 @@ function CostosPanel({
             cargoFijoML: ml.cargo_fijo != null ? ml.cargo_fijo : null,
             // Solo pisamos el SKU si ML ya tiene uno cargado — si todavía está
             // vacío en ML, no queremos borrar lo que el usuario esté por guardar.
-            ...(ml.sku ? { sku: ml.sku } : {})
+            ...(ml.sku ? { sku: ml.sku } : {}),
+            ...(ml.foto ? { foto: ml.foto } : {})
           };
           // Control: comparamos el cargo fijo que informa ML contra nuestra tabla.
           if (ml.cargo_fijo != null && ml.precio > 0) {
@@ -2118,7 +2138,7 @@ function TarjetaTiendaNube({ tn, productos, onUpdate, onRemove, cfg }) {
           onChange: e => onUpdate(tn.id, 'productoId', e.target.value)
         },
           h('option', { value: '' }, '— Elegí un producto de Costos —'),
-          (productos || []).map(p => h('option', { key: p.id, value: p.id }, p.apodo || p.nombre || '(sin nombre)')))),
+          (productos || []).map(p => h('option', { key: p.id, value: p.id }, nombreCorto(p))))),
       h('button', {
         type: 'button', className: 'icon-btn', onClick: () => onRemove(tn.id),
         'aria-label': 'Eliminar'
@@ -3074,8 +3094,8 @@ function InvestigacionPanel({
   // (apodo) que tiene en Costos, para reconocerla rápido; si no tiene apodo, el título de ML.
   const publicacionesConNombreCostos = (publicaciones || []).map(pub => {
     const prod = (productos || []).find(x => x.mlItemId === pub.id || x.id === 'ml' + pub.id);
-    const apodo = prod && (prod.apodo || '').trim();
-    return apodo ? { ...pub, etiqueta: apodo } : pub;
+    const nombre = prod ? nombreCorto(prod) : '';
+    return prod && nombre && nombre !== '(sin nombre)' && nombre !== prod.nombre ? { ...pub, etiqueta: nombre } : pub;
   });
   const cargarPublicaciones = async () => {
     const cfg = leerCfgBackend();
@@ -4709,7 +4729,8 @@ function FichaAds({ p, pub, guardar, politica, stock }) {
   const hayRoas = roasTexto !== '' && !isNaN(roasNum) && roasNum > 0;
 
   const cabecera = /*#__PURE__*/React.createElement("div", { className: "costo-card-header" },
-    /*#__PURE__*/React.createElement("h3", { className: "costo-card-title" }, p.apodo || p.nombre || '(sin nombre)'));
+    /*#__PURE__*/React.createElement(Miniatura, { p: p, size: 40 }),
+    /*#__PURE__*/React.createElement("h3", { className: "costo-card-title" }, nombreCorto(p)));
 
   if (!d) {
     return /*#__PURE__*/React.createElement("div", { className: "costo-card" }, cabecera,
@@ -6176,7 +6197,7 @@ function JopexPanel() {
   // Submenús del menú lateral
   const subCostos = productos.map(p => productoConCostoEfectivo(p, cotizaciones, stockProductos)).map(p => ({
     id: p.id,
-    label: (p.apodo || p.nombre || '(sin nombre)').slice(0, 34),
+    label: nombreCorto(p).slice(0, 34),
     alerta: (() => { const r = calcularCosto(p); return r && !r.error && r.promo && r.promo.margenRealPromo < 0; })()
   }));
   const subStock = stockProductos.map(p => {
@@ -6545,6 +6566,9 @@ function JopexPanel() {
           background: var(--card-bg); border: 1px solid rgba(245, 166, 35, 0.35);
           border-radius: 10px; padding: 10px 14px; margin-bottom: 18px;
         }
+        .costo-card-header { align-items: center; gap: 12px; }
+        .costo-card-titulos { flex: 1 1 auto; min-width: 0; }
+        .costo-card-sku { margin: 0; font-family: 'Rajdhani', sans-serif; font-size: 20px; font-weight: 700; letter-spacing: 0.02em; word-break: break-all; }
         .tc-value-box { width: auto; min-width: 90px; }
         .tc-value-box input { font-family: 'Rajdhani', sans-serif; font-size: 16px; font-weight: 700; }
         .tc-fuente { font-size: 11px; color: var(--text-secondary); }
