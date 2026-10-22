@@ -1261,6 +1261,44 @@ function ComponentesCosto({ p, cotizaciones, ef, onUpdate }) {
             h('span', { className: 'comp-total' }, 'Valor de Adquisición = suma de componentes: ', h('b', null, money(ef.total))))));
 }
 
+// ---------- Tipo de cambio: validación ----------
+// Un tipo de cambio menor a 100 no es válido (el USDT está en miles de pesos): es casi seguro un
+// tipeo a medio escribir, y dividir por él da márgenes en USD engañosos. Un valor guardado inválido
+// se ignora (se vuelve a pedir el TC en vez de usarlo).
+const TC_MINIMO_VALIDO = 100;
+function tcValido(v) {
+  const n = Number(v);
+  return v !== null && v !== '' && v !== undefined && !isNaN(n) && n >= TC_MINIMO_VALIDO ? n : null;
+}
+// Campo de TC a mano: se escribe libremente y se confirma al salir del campo (o con Enter),
+// no en cada tecla. Si el valor no es válido, vuelve al anterior y avisa.
+function TcInput({ valor, onCommit }) {
+  const [txt, setTxt] = useState(valor == null ? '' : String(valor));
+  const [err, setErr] = useState('');
+  React.useEffect(() => { setTxt(valor == null ? '' : String(valor)); }, [valor]);
+  const confirmar = () => {
+    if (txt === '') { setErr(''); if (valor != null) onCommit(null); return; }
+    const n = tcValido(txt);
+    if (n == null) {
+      setErr('Un TC menor a ' + TC_MINIMO_VALIDO + ' no es válido. Se mantiene el anterior.');
+      setTxt(valor == null ? '' : String(valor));
+      return;
+    }
+    setErr('');
+    if (n !== valor) onCommit(n);
+  };
+  return React.createElement(React.Fragment, null,
+    React.createElement("div", { className: "calc-field-input tc-value-box" },
+      React.createElement("span", { className: "cell-prefix" }, "$"),
+      React.createElement("input", {
+        type: "number", value: txt, placeholder: '—',
+        onChange: e => { setTxt(e.target.value); setErr(''); },
+        onBlur: confirmar,
+        onKeyDown: e => { if (e.key === 'Enter') e.target.blur(); }
+      })),
+    err && React.createElement("span", { className: "tc-fuente", style: { color: 'var(--danger, #ef4444)' } }, err));
+}
+
 // ---------- Precio manual (redondeado) por publicación ----------
 // Partiendo de un precio elegido a mano (por ejemplo el sugerido redondeado hacia arriba), muestra
 // cuánto cobra ML, cuánto deposita y cuánto queda de margen real. Usa el costo, el envío, el % de
@@ -1737,7 +1775,7 @@ function CostosPanel({
   const [tcBelo, setTcBeloState] = useState(() => {
     try {
       const s = window.localStorage.getItem('jopex_tc_belo');
-      return s ? JSON.parse(s).valor : null;
+      return s ? tcValido(JSON.parse(s).valor) : null;
     } catch (e) { return null; }
   });
   const [tcBeloFuente, setTcBeloFuente] = useState(() => {
@@ -1759,8 +1797,8 @@ function CostosPanel({
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const data = await resp.json();
       const ask = data && data.belo && data.belo.ask;
-      if (!ask) throw new Error('La respuesta no trajo la cotización de Belo.');
-      guardarTC(ask, new Date().toLocaleString('es-AR'));
+      if (tcValido(ask) == null) throw new Error('La respuesta no trajo una cotización de Belo válida.');
+      guardarTC(Number(ask), new Date().toLocaleString('es-AR'));
     } catch (e) {
       setTcBeloError('No se pudo traer la cotización de Belo automática (' + e.message + '). Cargalo a mano abajo.');
     }
@@ -1875,12 +1913,9 @@ function CostosPanel({
   }, /*#__PURE__*/React.createElement("h1", null, "Costos"), /*#__PURE__*/React.createElement("p", null, MODULE_DESC.costos)),
   /*#__PURE__*/React.createElement("div", { className: "tc-bar" },
     /*#__PURE__*/React.createElement("span", { className: "calc-field-label" }, "Tipo de cambio — USDT Belo"),
-    /*#__PURE__*/React.createElement("div", { className: "calc-field-input tc-value-box" },
-      /*#__PURE__*/React.createElement("span", { className: "cell-prefix" }, "$"),
-      /*#__PURE__*/React.createElement("input", {
-        type: "number", value: tcBelo == null ? '' : tcBelo, placeholder: '—',
-        onChange: e => guardarTC(e.target.value === '' ? null : Number(e.target.value), 'cargado a mano')
-      })),
+    /*#__PURE__*/React.createElement(TcInput, {
+      valor: tcBelo, onCommit: v => guardarTC(v, 'cargado a mano')
+    }),
     /*#__PURE__*/React.createElement("button", { type: "button", className: "add-btn", onClick: refrescarTC }, "⟳ Refrescar"),
     /*#__PURE__*/React.createElement("span", { className: "tc-fuente" },
       tcBeloError || (tcBeloFuente ? 'Última actualización: ' + tcBeloFuente + ' (criptoya.com, Belo ask).' : 'Todavía no se cargó el TC.'))),
@@ -5443,7 +5478,7 @@ function CalculadoraRapidaPanel() {
   const [tc, setTcState] = useState(() => {
     try {
       const s = window.localStorage.getItem('jopex_tc_belo');
-      return s ? JSON.parse(s).valor : null;
+      return s ? tcValido(JSON.parse(s).valor) : null;
     } catch (e) { return null; }
   });
   const [tcFuente, setTcFuente] = useState(() => {
@@ -5465,8 +5500,8 @@ function CalculadoraRapidaPanel() {
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const data = await resp.json();
       const ask = data && data.belo && data.belo.ask;
-      if (!ask) throw new Error('La respuesta no trajo la cotización de Belo.');
-      guardarTc(ask, new Date().toLocaleString('es-AR'));
+      if (tcValido(ask) == null) throw new Error('La respuesta no trajo una cotización de Belo válida.');
+      guardarTc(Number(ask), new Date().toLocaleString('es-AR'));
     } catch (e) {
       setTcError('No se pudo traer la cotización de Belo automática (' + e.message + '). Cargala a mano abajo.');
     }
@@ -5597,12 +5632,7 @@ function CalculadoraRapidaPanel() {
 
     h('div', { className: 'tc-bar' },
       h('span', { className: 'calc-field-label' }, 'Tipo de cambio — USDT Belo'),
-      h('div', { className: 'calc-field-input tc-value-box' },
-        h('span', { className: 'cell-prefix' }, '$'),
-        h('input', {
-          type: 'number', value: tc == null ? '' : tc, placeholder: '—',
-          onChange: e => guardarTc(e.target.value === '' ? null : Number(e.target.value), 'cargado a mano')
-        })),
+      h(TcInput, { valor: tc, onCommit: v => guardarTc(v, 'cargado a mano') }),
       h('button', { type: 'button', className: 'add-btn', onClick: refrescarTc }, '⟳ Refrescar'),
       h('span', { className: 'tc-fuente' },
         tcError || (tcFuente ? 'Última actualización: ' + tcFuente + ' (criptoya.com, Belo — compra).' : 'Todavía no se cargó el TC.'))),
