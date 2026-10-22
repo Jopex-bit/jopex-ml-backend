@@ -226,5 +226,64 @@ module.exports = (app) => {
     }
   });
 
+  // GET /api/costos/promos?item=MLA...   (diagnóstico, solo lectura)
+  // Muestra dónde vive cada promoción de ese ítem: la lista cruda del ítem, la del "producto de usuario"
+  // (user_product_id) y, por cada campaña del vendedor, si el ítem o su producto aparece adentro y con
+  // qué estado, precio y fechas. Sirve para ver las promociones activas / programadas.
+  router.get('/promos', async (req, res) => {
+    try {
+      const token = await app.locals.getAccessTokenValido();
+      const tokens = app.locals.leerTokens();
+      const API = app.locals.ML_API;
+      const auth = { headers: { Authorization: `Bearer ${token}` } };
+      const itemId = String(req.query.item || '').toUpperCase();
+      if (!itemId) return res.status(400).json({ error: 'Falta ?item=MLA...' });
+
+      const intento = async (url, params) => {
+        try {
+          const r = await axios.get(url, { ...auth, params });
+          return { ok: true, data: r.data };
+        } catch (e) {
+          return { ok: false, error: e.response?.data || e.message, status: e.response?.status };
+        }
+      };
+
+      const item = await intento(`${API}/items/${itemId}`, undefined);
+      const upid = item.ok ? item.data.user_product_id || null : null;
+
+      const out = {
+        item: itemId,
+        user_product_id: upid,
+        precio: item.ok ? item.data.price : null,
+        promos_del_item: await intento(`${API}/seller-promotions/items/${itemId}`, { app_version: 'v2' }),
+      };
+      if (upid) {
+        out.promos_del_producto = await intento(`${API}/seller-promotions/items/${upid}`, { app_version: 'v2' });
+        out.promos_user_products = await intento(`${API}/seller-promotions/user-products/${upid}`, { app_version: 'v2' });
+      }
+
+      // Campañas del vendedor y si este ítem (o su producto) está adentro.
+      const camp = await intento(`${API}/seller-promotions/users/${tokens.user_id}`, { app_version: 'v2' });
+      const lista = camp.ok ? (Array.isArray(camp.data) ? camp.data : camp.data?.results || []) : [];
+      out.en_campanas = await enTandas(lista, 4, async (c) => {
+        const r = await intento(`${API}/seller-promotions/promotions/${c.id}/items`, {
+          promotion_type: c.type, app_version: 'v2', limit: 100,
+        });
+        if (!r.ok) return { id: c.id, nombre: c.name, tipo: c.type, estado_campana: c.status, error: r.error };
+        const filas = Array.isArray(r.data) ? r.data : r.data?.results || [];
+        const mias = filas.filter((x) => x.id === itemId || (upid && x.id === upid));
+        return {
+          id: c.id, nombre: c.name, tipo: c.type, estado_campana: c.status,
+          desde: c.start_date || null, hasta: c.finish_date || null,
+          items_en_campana: filas.length, aparece: mias,
+        };
+      });
+      res.json(out);
+    } catch (err) {
+      console.error(err.response?.data || err.message);
+      res.status(500).json({ error: 'No se pudo hacer el diagnóstico.', detalle: err.response?.data || err.message });
+    }
+  });
+
   return router;
 };
