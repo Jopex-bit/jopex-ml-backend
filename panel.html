@@ -1476,9 +1476,8 @@ function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate
         h(CampoInput, { label: '% Mg. de Utilidad deseado', prefix: '%', value: prim.mgUtilidad, onChange: v => onUpdateGrupo('mgUtilidad', v) }))),
     h('div', { className: 'promo-block' },
       h('h4', null, 'Condiciones de venta'),
-      !costoOk
-        ? h('div', { className: 'sub-empty' }, 'Cargá el costo del producto para ver los precios y márgenes de cada condición.')
-        : h('div', { className: 'grupo-tabla-wrap' },
+      !costoOk && h('div', { className: 'sub-empty' }, 'Cargá el costo del producto para ver el precio sugerido y los márgenes. Los precios publicados ya se ven abajo.'),
+      h('div', { className: 'grupo-tabla-wrap' },
             h('table', { className: 'grupo-tabla' },
               h('thead', null, h('tr', null,
                 h('th', null, 'Condición'), h('th', null, 'Precio sugerido'), h('th', null, 'Publicado en ML'),
