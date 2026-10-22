@@ -1161,7 +1161,16 @@ function costoEfectivo(p, cotizaciones) {
 // con Mercado Libre) resta unidades; cuando el lote se agota, el costo pasa al siguiente.
 // Los lotes marcados "ya no cuenta" se ignoran. Sin saldo cargado no hay modo lotes y todo sigue igual.
 function stockDeProducto(p, stockProductos) {
-  return (stockProductos || []).find(x => x.mlItemId && p.mlItemId && x.mlItemId === p.mlItemId) || null;
+  // Las publicaciones de un mismo SKU comparten el stock y los lotes: se busca por el ID de
+  // cualquiera de ellas (p.hermanosMl lo agrega conHermanos, solo en memoria).
+  const ids = [p.mlItemId].concat(p.hermanosMl || []).filter(Boolean);
+  return (stockProductos || []).find(x => x.mlItemId && ids.includes(x.mlItemId)) || null;
+}
+// Agrega a cada producto los IDs de las otras publicaciones de su mismo SKU (no se guarda).
+function conHermanos(productos) {
+  const porSku = {};
+  (productos || []).forEach(p => { const k = skuClave(p); if (k && p.mlItemId) (porSku[k] = porSku[k] || []).push(p.mlItemId); });
+  return (productos || []).map(p => { const k = skuClave(p); return k && porSku[k] && porSku[k].length > 1 ? { ...p, hermanosMl: porSku[k] } : p; });
 }
 function costoDeLote(envio, cotizaciones) {
   if (envio.cotizacionId) {
@@ -1316,6 +1325,42 @@ function TcInput({ valor, onCommit }) {
     err && React.createElement("span", { className: "tc-fuente", style: { color: 'var(--danger, #ef4444)' } }, err));
 }
 
+// ---------- Agrupar las publicaciones por SKU ----------
+// Cada SKU suele tener 3 publicaciones que solo difieren en la condición de venta. Ordenadas por
+// precio: la más barata es Contado, la del medio 3 cuotas sin interés y la más cara 6 cuotas.
+const CONDICIONES_SKU = [
+  { label: 'Contado', cuotas: 'sin' },
+  { label: '3 cuotas sin interés', cuotas: '3' },
+  { label: '6 cuotas sin interés', cuotas: '6' }
+];
+function skuClave(p) { return ((p && p.sku) || '').trim().toUpperCase(); }
+function agruparPorSku(productos) {
+  const grupos = [];
+  const idx = {};
+  (productos || []).forEach(p => {
+    const k = skuClave(p);
+    if (!k) { grupos.push({ clave: '', sku: '', id: p.id, miembros: [p] }); return; }
+    if (idx[k] == null) { idx[k] = grupos.length; grupos.push({ clave: k, sku: p.sku.trim(), id: p.id, miembros: [] }); }
+    grupos[idx[k]].miembros.push(p);
+  });
+  grupos.forEach(g => {
+    if (g.miembros.length > 1) g.miembros = g.miembros.slice().sort((a, b) => (Number(a.precioML) || 0) - (Number(b.precioML) || 0));
+  });
+  return grupos;
+}
+// Lo que queda con un precio de venta dado (el cargo fijo de ML se resuelve según ese precio).
+function margenConPrecio(precio, p, costo, tasasCuotas) {
+  const cu = p.cuotas || '6';
+  const finPct = cu === 'sin' ? 0 : (Number((tasasCuotas || TASAS_CUOTAS_DEFAULT)[cu]) || 0);
+  const envio = Number(p.envioML) || 0;
+  const fijo = cargoFijoDe(precio);
+  const comVar = precio * (Number(p.cargoVenta) || 0) / 100;
+  const fin = precio * finPct / 100;
+  const deposito = precio - comVar - fijo - fin - envio;
+  const margen = deposito - costo;
+  return { fijo, comVar, fin, envio, deposito, margen, margenPct: margen / precio * 100 };
+}
+
 // ---------- Precio manual (redondeado) por publicación ----------
 // Partiendo de un precio elegido a mano (por ejemplo el sugerido redondeado hacia arriba), muestra
 // cuánto cobra ML, cuánto deposita y cuánto queda de margen real. Usa el costo, el envío, el % de
@@ -1362,6 +1407,108 @@ function PrecioManualBloque({ p, r, tasasCuotas, onUpdate, tcBelo }) {
             pct(Math.abs(m.margenPct - objetivo)) + (m.margenPct >= objetivo ? ' por encima.' : ' por debajo.')),
       Math.abs(pm - r.precio) / r.precio > 0.3 && h('div', { className: 'data-note', style: { marginBottom: 0 } },
         'Ojo: este precio está lejos del sugerido (' + money(r.precio) + '). Revisá que no sea un error de tipeo.')));
+}
+
+// ---------- Tarjeta de un SKU (agrupa sus publicaciones por condición de venta) ----------
+// El costo, el envío, el % de cargo y el margen deseado se cargan una sola vez y se escriben en todas
+// las publicaciones del SKU. Debajo, una fila por condición de venta con el precio sugerido, el precio
+// publicado en Mercado Libre y lo que queda de margen real en cada caso.
+function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate, tasasCuotas, onUpdateTasa, tcBelo, cotizaciones, stockProductos }) {
+  const h = React.createElement;
+  const [abierta, setAbierta] = useState('');
+  // Lo compartido (costo, envío, cargo, margen) se lee de la primera publicación que lo tenga cargado.
+  const llena = v => v !== '' && v != null && !(Array.isArray(v) && !v.length);
+  const prim = g.miembros.reduce((acc, m) => {
+    if (!acc) return { ...m };
+    ['valorAdquisicion', 'componentes', 'envioML', 'cargoVenta', 'mgUtilidad'].forEach(c => { if (!llena(acc[c]) && llena(m[c])) acc[c] = m[c]; });
+    return acc;
+  }, null);
+  const ids = g.miembros.map(m => m.mlItemId).filter(Boolean);
+  const ef = costoEfectivo(prim, cotizaciones);
+  const sp = (stockProductos || []).find(x => x.mlItemId && ids.includes(x.mlItemId)) || null;
+  const lotes = ef ? null : costoPorLotes(sp, cotizaciones);
+  const loteCosto = lotes && lotes.costo ? lotes : null;
+  const costo = ef ? ef.total : loteCosto ? Math.round(loteCosto.costo.valor * 100) / 100 : Number(prim.valorAdquisicion);
+  const costoOk = !isNaN(costo) && costo > 0;
+  const tres = g.miembros.length === 3;
+  const difiere = campo => new Set(g.miembros.map(m => String(m[campo] == null ? '' : m[campo]))).size > 1;
+  const colorMargen = (mg, obj) => mg <= 0 ? 'var(--danger, #ef4444)' : (obj > 0 && mg < obj - 0.05 ? '#f59e0b' : undefined);
+
+  const filas = g.miembros.map((m, i) => {
+    const cond = tres ? CONDICIONES_SKU[i] : null;
+    const cuotas = cond ? cond.cuotas : (m.cuotas || '6');
+    const pe = { ...m, valorAdquisicion: costo, cuotas };
+    const r = costoOk ? calcularCosto(pe, tasasCuotas) : null;
+    const pub = Number(m.precioML);
+    const mp = costoOk && pub > 0 ? margenConPrecio(pub, pe, costo, tasasCuotas) : null;
+    const pm = Number(m.precioManual);
+    const mm = costoOk && pm > 0 ? margenConPrecio(pm, pe, costo, tasasCuotas) : null;
+    return { m, cond, cuotas, r, pub, mp, pm, mm, obj: Number(m.mgUtilidad) || 0 };
+  });
+  const cuotaTxt = c => c === 'sin' ? 'Contado' : c + ' cuotas';
+
+  return h('div', { className: 'costo-card grupo-sku-card' },
+    h('div', { className: 'costo-card-header' },
+      h(Miniatura, { p: prim, size: 56 }),
+      h('div', { className: 'costo-card-titulos' },
+        h('h3', { className: 'costo-card-title costo-card-sku' }, g.sku),
+        h('div', { className: 'costo-card-subtitulo', style: { border: 'none' } },
+          g.miembros.length + ' publicaciones' + (tres ? ' · contado, 3 y 6 cuotas' : '')))),
+    h(ComponentesCosto, { p: prim, cotizaciones: cotizaciones, ef: ef, onUpdate: (id, campo, valor) => onUpdateGrupo(campo, valor) }),
+    h('div', { className: 'costo-card-body grupo-sku-body' },
+      h('div', { className: 'costo-block' },
+        h('h4', null, 'Costo del producto'),
+        ef
+          ? h(CampoCalculado, { label: 'Valor de Adquisición (suma de componentes)', value: money(ef.total), highlight: true })
+          : loteCosto
+            ? h(CampoCalculado, { label: 'Valor de Adquisición (costo del lote en uso)', value: money(loteCosto.costo.valor), highlight: true })
+            : h(CampoInput, { label: 'Valor de Adquisición (último lote)', prefix: '$', value: prim.valorAdquisicion, onChange: v => onUpdateGrupo('valorAdquisicion', v) }),
+        loteCosto && h('div', { className: 'lote-info' },
+          'Lote ' + loteCosto.enUso.n + ': quedan ' + loteCosto.enUso.quedan + ' de ' + loteCosto.enUso.unidades + ' u · ' +
+          (loteCosto.costo.definitivo ? 'costo definitivo' : 'costo estimado') +
+          (loteCosto.agotado ? ' · lote agotado, falta cargar el siguiente' : '')),
+        h(CampoInput, { label: 'Costo Envío ML', prefix: '$', value: prim.envioML, onChange: v => onUpdateGrupo('envioML', v) }),
+        difiere('envioML') && h('div', { className: 'data-note', style: { marginBottom: 0 } }, 'El envío difiere entre las publicaciones de este SKU (se pisa con el valor que cargues acá).')),
+      h('div', { className: 'costo-block' },
+        h('h4', null, 'Cargos de MELI y Mg. Utilidad'),
+        h(CampoInput, { label: '% Cargo por venta', prefix: '%', value: prim.cargoVenta, onChange: v => onUpdateGrupo('cargoVenta', v) }),
+        difiere('cargoVenta') && h('div', { className: 'data-note', style: { marginBottom: 0 } }, 'El % de cargo difiere entre las publicaciones de este SKU (se pisa con el valor que cargues acá).'),
+        h(CampoInput, { label: '% Mg. de Utilidad deseado', prefix: '%', value: prim.mgUtilidad, onChange: v => onUpdateGrupo('mgUtilidad', v) }))),
+    h('div', { className: 'promo-block' },
+      h('h4', null, 'Condiciones de venta'),
+      !costoOk
+        ? h('div', { className: 'sub-empty' }, 'Cargá el costo del producto para ver los precios y márgenes de cada condición.')
+        : h('div', { className: 'grupo-tabla-wrap' },
+            h('table', { className: 'grupo-tabla' },
+              h('thead', null, h('tr', null,
+                h('th', null, 'Condición'), h('th', null, 'Precio sugerido'), h('th', null, 'Publicado en ML'),
+                h('th', null, 'Margen real al publicado'), h('th', null, 'Precio manual'), h('th', null, 'Margen con precio manual'), h('th', null))),
+              h('tbody', null, filas.map(f => h('tr', { key: f.m.id },
+                h('td', null,
+                  h('b', null, f.cond ? f.cond.label : 'Publicación'),
+                  h('div', { className: 'muted', style: { fontSize: 11 } }, (f.m.mlItemId || 'sin publicar') + (tres ? '' : ' · ' + cuotaTxt(f.cuotas)))),
+                h('td', null, f.r && !f.r.error ? money(f.r.precio) : '—'),
+                h('td', null, f.pub > 0 ? money(f.pub) : '—'),
+                h('td', { style: { color: f.mp ? colorMargen(f.mp.margenPct, f.obj) : undefined } },
+                  f.mp ? pct(f.mp.margenPct) + ' · ' + money(f.mp.margen) : '—'),
+                h('td', null, h('div', { className: 'calc-field-input' },
+                  h('span', { className: 'cell-prefix' }, '$'),
+                  h('input', { type: 'number', value: f.m.precioManual || '', placeholder: '—', onChange: e => onUpdateMiembro(f.m.id, 'precioManual', e.target.value) }))),
+                h('td', { style: { color: f.mm ? colorMargen(f.mm.margenPct, f.obj) : undefined } },
+                  f.mm ? pct(f.mm.margenPct) + ' · ' + money(f.mm.margen) : '—'),
+                h('td', null, h('button', {
+                  type: 'button', className: 'add-btn ghost-btn',
+                  onClick: () => setAbierta(a => a === f.m.id ? '' : f.m.id)
+                }, abierta === f.m.id ? 'Cerrar' : 'Detalle')))))),
+            h('p', { className: 'lineas-hint', style: { marginTop: 8 } },
+              'Márgenes con el costo de arriba y el envío y % de cargo del SKU. "Detalle" abre la tarjeta individual de esa publicación (promoción, proyección, etc.).'))),
+    abierta && (() => {
+      const m = g.miembros.find(x => x.id === abierta);
+      return m ? h(ProductoCostoCard, {
+        p: m, onUpdate: onUpdateMiembro, onRemove: onRemove, onDuplicate: onDuplicate, tasasCuotas: tasasCuotas,
+        onUpdateTasa: onUpdateTasa, tcBelo: tcBelo, cotizaciones: cotizaciones, stockProductos: stockProductos
+      }) : null;
+    })());
 }
 
 function ProductoCostoCard({
@@ -1736,6 +1883,11 @@ function CostosPanel({
   const removeProducto = id => {
     setProductos(prev => prev.filter(p => p.id !== id));
   };
+  // Un campo compartido del SKU se escribe en todas sus publicaciones.
+  const updateGrupo = (g, field, value) => {
+    const ids = g.miembros.map(m => m.id);
+    setProductos(prev => prev.map(p => ids.includes(p.id) ? { ...p, [field]: value } : p));
+  };
   // Duplicar SKU: copia la tarjeta con sus componentes (ids nuevos) pero sin vínculo a una
   // publicación de ML ni SKU, así se arma una variante cambiando solo el nombre y las piezas.
   const duplicarProducto = id => {
@@ -1834,7 +1986,7 @@ function CostosPanel({
     setSincronizando(true); setSyncError(''); setSyncMsg('');
     try {
       const base = cfg.url.replace(/\/+$/, '');
-      const resp = await fetch(base + '/api/costos', { headers: cfg.key ? { 'x-api-key': cfg.key } : {} });
+      const resp = await fetch(base + '/api/costos?limit=100', { headers: cfg.key ? { 'x-api-key': cfg.key } : {} });
       const txt = await resp.text();
       let json; try { json = JSON.parse(txt); } catch (e) { json = { error: txt }; }
       if (!resp.ok) throw new Error(json.error || ('HTTP ' + resp.status));
@@ -1845,10 +1997,14 @@ function CostosPanel({
 
       {
         const copia = productos.slice();
+        // Una tarjeta por publicación. Las 3 publicaciones de un SKU comparten título, así que el
+        // nombre solo sirve para reconocer tarjetas cargadas a mano que todavía no tienen ID de ML
+        // (y cada una se usa una sola vez); si no, las publicaciones se pisarían entre sí.
+        const reclamadas = new Set();
         json.productos.forEach(ml => {
-          // 1º intentamos por ID de publicación, 2º por nombre
+          // 1º intentamos por ID de publicación, 2º por nombre (solo tarjetas sin ID)
           let idx = copia.findIndex(p => p.mlItemId && p.mlItemId === ml.ml_item_id);
-          if (idx < 0) idx = copia.findIndex(p => norm(p.nombre) === norm(ml.titulo));
+          if (idx < 0) idx = copia.findIndex((p, i) => !p.mlItemId && !reclamadas.has(i) && norm(p.nombre) === norm(ml.titulo));
 
           const desdeML = {
             mlItemId: ml.ml_item_id,
@@ -1875,13 +2031,18 @@ function CostosPanel({
             }
           }
 
+          if (idx >= 0) reclamadas.add(idx);
           if (idx >= 0) {
             // Preservamos SIEMPRE lo que es tuyo: costo del proveedor y margen objetivo
             copia[idx] = { ...copia[idx], nombre: copia[idx].nombre || ml.titulo, ...desdeML };
             actualizados++;
           } else {
+            // El ID de la tarjeta nunca se repite: una tarjeta vieja pudo quedar con el ID de otra
+            // publicación (cuando las de un mismo SKU se pisaban por título).
+            let nuevoId = 'ml' + ml.ml_item_id;
+            while (copia.some(c => c.id === nuevoId)) nuevoId += '_';
             copia.push({
-              id: 'ml' + ml.ml_item_id,
+              id: nuevoId,
               nombre: ml.titulo,
               valorAdquisicion: '',
               mgUtilidad: '',
@@ -1889,6 +2050,33 @@ function CostosPanel({
             });
             nuevos++;
           }
+        });
+        // Las publicaciones nuevas de un SKU que ya tiene costo cargado heredan lo compartido
+        // (costo, componentes y margen deseado) de su hermana; solo se completan campos vacíos.
+        const vacio = v => v === '' || v == null || (Array.isArray(v) && !v.length);
+        const COMPARTIDOS = ['valorAdquisicion', 'componentes', 'mgUtilidad'];
+        const donantes = {};
+        copia.forEach(p => {
+          const k = skuClave(p);
+          if (k && !donantes[k] && COMPARTIDOS.some(c => !vacio(p[c]))) donantes[k] = p;
+        });
+        copia.forEach((p, i) => {
+          const k = skuClave(p); const d = k && donantes[k];
+          if (!d || d === p) return;
+          const faltan = COMPARTIDOS.filter(c => vacio(p[c]) && !vacio(d[c]));
+          if (faltan.length) {
+            const rell = { ...p };
+            faltan.forEach(c => { rell[c] = c === 'componentes' ? d[c].map((k2, j) => ({ ...k2, id: 'k' + Date.now() + i + j })) : d[c]; });
+            copia[i] = rell;
+          }
+        });
+        // Repara IDs repetidos (los dejó una sincronización anterior): la segunda tarjeta con un ID
+        // repetido se renombra, para que editar una no toque a la otra.
+        const vistos = new Set();
+        copia.forEach((c, i) => {
+          let id = c.id;
+          if (vistos.has(id)) { while (vistos.has(id) || copia.some(x => x !== c && x.id === id)) id += '_'; copia[i] = { ...c, id }; }
+          vistos.add(id);
         });
         setProductos(copia);
       }
@@ -1922,7 +2110,7 @@ function CostosPanel({
     }
   };
 
-  const resultados = productos.map(p => calcularCosto(productoConCostoEfectivo(p, cotizaciones, stockProductos), tasasCuotas)).filter(r => r && !r.error);
+  const resultados = conHermanos(productos).map(p => calcularCosto(productoConCostoEfectivo(p, cotizaciones, stockProductos), tasasCuotas)).filter(r => r && !r.error);
   const margenProm = resultados.length ? resultados.reduce((s, r) => s + r.mgUtilidad, 0) / resultados.length : null;
   const roasPeor = resultados.length ? Math.max(...resultados.map(r => r.roasMinimo)) : null;
   const bajoUmbral = resultados.filter(r => r.mgUtilidad < 35).length;
@@ -1999,10 +2187,23 @@ function CostosPanel({
   syncError && /*#__PURE__*/React.createElement("div", { className: "competencia-error" }, syncError),
   /*#__PURE__*/React.createElement("div", {
     className: "costo-cards-grid"
-  }, (seleccion ? productos.filter(p => p.id === seleccion) : productos).map(p =>
-    /*#__PURE__*/React.createElement(ProductoCostoCard, {
-      key: p.id,
-      p: p,
+  }, agruparPorSku(productos).filter(g => !seleccion || g.miembros.some(m => m.id === seleccion)).map(g => g.miembros.length > 1
+    ? /*#__PURE__*/React.createElement(GrupoSkuCard, {
+      key: 'sku-' + g.clave,
+      g: g,
+      onUpdateGrupo: (campo, valor) => updateGrupo(g, campo, valor),
+      onUpdateMiembro: updateField,
+      onRemove: removeProducto,
+      onDuplicate: duplicarProducto,
+      tasasCuotas: tasasCuotas,
+      onUpdateTasa: updateTasa,
+      tcBelo: tcBelo,
+      cotizaciones: cotizaciones,
+      stockProductos: stockProductos
+    })
+    : /*#__PURE__*/React.createElement(ProductoCostoCard, {
+      key: g.miembros[0].id,
+      p: g.miembros[0],
       onUpdate: updateField,
       onRemove: removeProducto,
       onDuplicate: duplicarProducto,
@@ -3149,7 +3350,9 @@ function InvestigacionPanel({
     if (destinoMl) {
       const pub = (publicaciones || []).find(p => p.id === destinoMl);
       setProductos(prev => {
-        const idx = prev.findIndex(p => p.mlItemId === destinoMl || p.id === 'ml' + destinoMl);
+        // Primero la tarjeta cuyo ID de publicación coincide; solo si no hay, la de ID 'ml' + publicación.
+        let idx = prev.findIndex(p => p.mlItemId === destinoMl);
+        if (idx < 0) idx = prev.findIndex(p => p.id === 'ml' + destinoMl);
         if (idx >= 0) {
           const copia = prev.slice();
           // Si la tarjeta se arma con componentes, no se pisa el total: se vincula esta
@@ -5781,7 +5984,7 @@ function ModulePanel({
   elegir
 }) {
   // Costos edita los datos crudos; el resto de los módulos lee el costo ya sumado.
-  const productosCosto = React.useMemo(() => productos.map(p => productoConCostoEfectivo(p, cotizaciones, stockProductos)), [productos, cotizaciones, stockProductos]);
+  const productosCosto = React.useMemo(() => conHermanos(productos).map(p => productoConCostoEfectivo(p, cotizaciones, stockProductos)), [productos, cotizaciones, stockProductos]);
   if (moduleId === 'costos') return /*#__PURE__*/React.createElement(CostosPanel, {
     productos: productos,
     setProductos: setProductos,
@@ -6195,10 +6398,10 @@ function JopexPanel() {
   }, [menuAbierto]);
 
   // Submenús del menú lateral
-  const subCostos = productos.map(p => productoConCostoEfectivo(p, cotizaciones, stockProductos)).map(p => ({
-    id: p.id,
-    label: nombreCorto(p).slice(0, 34),
-    alerta: (() => { const r = calcularCosto(p); return r && !r.error && r.promo && r.promo.margenRealPromo < 0; })()
+  const subCostos = agruparPorSku(conHermanos(productos).map(p => productoConCostoEfectivo(p, cotizaciones, stockProductos))).map(g => ({
+    id: g.id,
+    label: nombreCorto(g.miembros[0]).slice(0, 34),
+    alerta: g.miembros.some(p => { const r = calcularCosto(p); return r && !r.error && r.promo && r.promo.margenRealPromo < 0; })
   }));
   const subStock = stockProductos.map(p => {
     const r = calcularModeloStock(p);
@@ -6566,6 +6769,14 @@ function JopexPanel() {
           background: var(--card-bg); border: 1px solid rgba(245, 166, 35, 0.35);
           border-radius: 10px; padding: 10px 14px; margin-bottom: 18px;
         }
+        .grupo-sku-card { grid-column: 1 / -1; }
+        .grupo-sku-body { grid-template-columns: 1fr 1fr; }
+        .grupo-tabla-wrap { overflow-x: auto; }
+        .grupo-tabla { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .grupo-tabla th { text-align: left; font-size: 11px; font-weight: 600; color: var(--text-secondary); padding: 6px 8px; white-space: nowrap; }
+        .grupo-tabla td { padding: 8px; border-top: 1px dashed var(--border-soft); vertical-align: middle; white-space: nowrap; }
+        .grupo-tabla .calc-field-input { min-width: 120px; }
+        @media (max-width: 900px) { .grupo-sku-body { grid-template-columns: 1fr; } }
         .costo-card-header { align-items: center; gap: 12px; }
         .costo-card-titulos { flex: 1 1 auto; min-width: 0; }
         .costo-card-sku { margin: 0; font-family: 'Rajdhani', sans-serif; font-size: 20px; font-weight: 700; letter-spacing: 0.02em; word-break: break-all; }
