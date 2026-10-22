@@ -1417,19 +1417,78 @@ function consolidarStock(ms, sku) {
 }
 function agruparStock(stockProductos, costosProductos) {
   const info = {};
-  (costosProductos || []).forEach(c => { if (c.mlItemId) info[c.mlItemId] = { sku: (c.sku || '').trim(), familia: (c.familia || '').trim() }; });
+  // Collares (unidades físicas) que consume cada venta del SKU: el pack x2 consume 2, el x3 consume 3.
+  // Se toma de su costo: un único componente con cantidad N (Collar + Tag x N); si no, 1.
+  const factorDe = c => (Array.isArray(c.componentes) && c.componentes.length === 1 ? Math.max(1, Number(c.componentes[0].cantidad) || 1) : 1);
+  (costosProductos || []).forEach(c => { if (c.mlItemId) info[c.mlItemId] = { sku: (c.sku || '').trim(), familia: (c.familia || '').trim(), logistica: c.logistica || '', factor: factorDe(c) }; });
   const grupos = [];
   const idx = {};
   (stockProductos || []).forEach(sp => {
-    const inf = (sp.mlItemId && info[sp.mlItemId]) || { sku: '', familia: '' };
+    const inf = (sp.mlItemId && info[sp.mlItemId]) || { sku: '', familia: '', logistica: '', factor: 1 };
     const k = inf.sku.toUpperCase();
-    if (!k) { grupos.push({ clave: '', sku: '', familia: '', miembros: [sp] }); return; }
-    if (idx[k] == null) { idx[k] = grupos.length; grupos.push({ clave: k, sku: inf.sku, familia: inf.familia, miembros: [] }); }
-    grupos[idx[k]].miembros.push(sp);
-    if (!grupos[idx[k]].familia && inf.familia) grupos[idx[k]].familia = inf.familia;
+    if (!k) { grupos.push({ clave: '', sku: '', familia: '', logistica: inf.logistica, factor: 1, miembros: [sp] }); return; }
+    if (idx[k] == null) { idx[k] = grupos.length; grupos.push({ clave: k, sku: inf.sku, familia: inf.familia, logistica: '', factor: inf.factor, miembros: [] }); }
+    const gg = grupos[idx[k]];
+    gg.miembros.push(sp);
+    if (!gg.familia && inf.familia) gg.familia = inf.familia;
+    if (inf.logistica && (!gg.logistica || inf.logistica === 'fulfillment')) gg.logistica = inf.logistica;
   });
   grupos.forEach(g => { g.virtual = consolidarStock(g.miembros, g.sku); g.id = g.virtual.id; });
   return grupos;
+}
+// Pool de una familia: los SKU de una familia son el mismo producto físico (mismo lote, mismo depósito).
+//  - Stock en FULL: solo el de los SKU que salen por FULL (los de despacho propio muestran en Mercado
+//    Libre un número configurado, no inventario real). Si no se sabe la logística, solo el SKU principal.
+//  - Demanda: suma de las ventas de todos los SKU en collares físicos (pack x2 = 2, pack x3 = 3).
+//  - Envíos, lotes, conteo y tiempos: los del SKU principal (el que ya los tiene cargados).
+function consolidarFamilia(nombre, gs) {
+  const num = v => (v === '' || v == null || isNaN(v) ? 0 : Number(v));
+  const tieneDatos = g => (g.virtual.envios || []).length > 0 || (g.virtual.stockFisicoBase !== '' && g.virtual.stockFisicoBase != null);
+  const prim = gs.find(g => (g.virtual.envios || []).length > 0) || gs.find(tieneDatos) || gs[0];
+  const sabeLogistica = gs.some(g => g.logistica);
+  const full = sabeLogistica ? gs.filter(g => g.logistica === 'fulfillment') : [prim];
+  const stockFull = full.reduce((t, g) => t + num(g.virtual.stockFull), 0);
+  const porMes = {};
+  const porDia = {};
+  gs.forEach(g => {
+    (g.virtual.ventasMensuales || []).forEach(v => {
+      const k = (v.mes || '') + '|' + (v.anio || '');
+      const a = porMes[k] || (porMes[k] = { id: 'vmg:' + k, mes: v.mes, anio: v.anio, unidades: 0, dias: 0 });
+      a.unidades += num(v.unidades) * g.factor;
+      a.dias = Math.max(a.dias, num(v.dias));
+    });
+    (g.virtual.ventasDiarias || []).forEach(d => { porDia[d.fecha] = (porDia[d.fecha] || 0) + num(d.unidades) * g.factor; });
+  });
+  const virtual = {
+    ...prim.virtual,
+    etiqueta: 'FAMILIA ' + nombre,
+    sku: '',
+    familia: nombre,
+    _esFamilia: true,
+    _key: 'fam:' + nombre,
+    stockFull,
+    vendidasFull: gs.reduce((t, g) => t + num(g.virtual.vendidasFull) * g.factor, 0),
+    vendidasPropias: gs.reduce((t, g) => t + num(g.virtual.vendidasPropias) * g.factor, 0),
+    ventasMensuales: Object.values(porMes),
+    ventasDiarias: Object.keys(porDia).sort().map(f => ({ fecha: f, unidades: porDia[f] })),
+    _miembros: gs.reduce((t, g) => t.concat(g.miembros.map(m => m.id)), [])
+  };
+  const detalle = gs.map(g => {
+    const ventas = (g.virtual.ventasMensuales || []).reduce((t, v) => t + num(v.unidades), 0);
+    const esFull = sabeLogistica ? g.logistica === 'fulfillment' : g === prim;
+    return { sku: g.sku || g.virtual.nombre, logistica: g.logistica, esFull, publicado: num(g.virtual.stockFull), ventas, factor: g.factor, equivalentes: ventas * g.factor };
+  });
+  return { nombre, key: 'fam:' + nombre, grupos: gs, virtual, detalle, sabeLogistica };
+}
+function agruparFamiliasStock(grupos) {
+  const out = [];
+  const idx = {};
+  grupos.forEach(g => {
+    if (!g.familia) return;
+    if (idx[g.familia] == null) { idx[g.familia] = out.length; out.push({ nombre: g.familia, gs: [] }); }
+    out[idx[g.familia]].gs.push(g);
+  });
+  return out.map(f => consolidarFamilia(f.nombre, f.gs));
 }
 // Lo que queda con un precio de venta dado (el cargo fijo de ML se resuelve según ese precio).
 function margenConPrecio(precio, p, costo, tasasCuotas) {
@@ -2153,6 +2212,7 @@ function CostosPanel({
             ...(ml.foto ? { foto: ml.foto } : {}),
             // Ofertas de campaña (relámpago, etc.): la vigente con menor precio y las próximas.
             // Se reemplazan en cada sincronización; sin oferta quedan vacías.
+            logistica: ml.logistic_type || null,
             promoAhora: ml.promos_ahora && ml.promos_ahora[0] ? ml.promos_ahora[0] : null,
             promosProgramadas: ml.promos_programadas || []
           };
@@ -4140,12 +4200,17 @@ function StockPanel({
   // handlers; 'productosV' es la consolidada (una por SKU) que se muestra.
   const grupos = agruparStock(productos, productosCostos);
   const productosV = grupos.map(g => g.virtual);
+  const familias = agruparFamiliasStock(grupos);
   const [envioAbierto, setEnvioAbierto] = useState(null);
   const [selInterno, setSelInterno] = useState(STOCK_PRODUCTOS_INICIAL[0]?.id || null);
   // La selección del menú lateral manda; si no hay, vale la interna.
   // Al elegir en el menú, el detalle se abre solo (no hay que hacer un segundo clic).
   const selectedId = seleccion || selInterno;
   const setSelectedId = setSelInterno;
+  // Un SKU que pertenece a una familia se ve siempre como su familia (stock y demanda en común).
+  const gSelRaw = grupos.find(g => g.id === selectedId) || null;
+  const selId = String(selectedId || '').startsWith('fam:') ? selectedId : (gSelRaw && gSelRaw.familia ? 'fam:' + gSelRaw.familia : selectedId);
+  const famSel = String(selId || '').startsWith('fam:') ? (familias.find(f => f.key === selId) || null) : null;
   React.useEffect(() => {
     if (seleccion) setSelInterno(seleccion);
   }, [seleccion]);
@@ -4265,12 +4330,18 @@ function StockPanel({
       [field]: value
     } : p));
   };
+  // IDs de todas las publicaciones que alimentan lo que se está viendo (la familia entera o el SKU).
+  const idsDePublicaciones = prodId => {
+    if (String(selId || '').startsWith('fam:')) { const f = familias.find(x => x.key === selId); if (f) return f.virtual._miembros; }
+    const g = grupos.find(x => x.id === prodId);
+    return g ? g.miembros.map(m => m.id) : [];
+  };
   const updateVenta = (prodId, ventaId, field, value) => {
     if (String(ventaId).startsWith('vmg:')) {
-      // Fila consolidada: solo "días con stock" se edita, y se aplica a todas las publicaciones del SKU.
-      const g = grupos.find(x => x.id === prodId); const key = String(ventaId).slice(4);
-      if (!g || field !== 'dias') return;
-      const ids = g.miembros.map(m => m.id);
+      // Fila consolidada: solo "días con stock" se edita, y se aplica a todas las publicaciones del SKU o la familia.
+      const key = String(ventaId).slice(4);
+      const ids = idsDePublicaciones(prodId);
+      if (!ids.length || field !== 'dias') return;
       setProductos(prev => prev.map(p => !ids.includes(p.id) ? p : { ...p, ventasMensuales: (p.ventasMensuales || []).map(v => ((v.mes || '') + '|' + (v.anio || '')) === key ? { ...v, dias: value } : v) }));
       return;
     }
@@ -4295,9 +4366,9 @@ function StockPanel({
   };
   const removeVenta = (prodId, ventaId) => {
     if (String(ventaId).startsWith('vmg:')) {
-      const g = grupos.find(x => x.id === prodId); const key = String(ventaId).slice(4);
-      if (!g) return;
-      const ids = g.miembros.map(m => m.id);
+      const key = String(ventaId).slice(4);
+      const ids = idsDePublicaciones(prodId);
+      if (!ids.length) return;
       setProductos(prev => prev.map(p => !ids.includes(p.id) ? p : { ...p, ventasMensuales: (p.ventasMensuales || []).filter(v => ((v.mes || '') + '|' + (v.anio || '')) !== key) }));
       return;
     }
@@ -4394,10 +4465,23 @@ function StockPanel({
     p,
     r: calcularModeloStock(p)
   }));
-  const seleccionado = productosV.find(p => p.id === selectedId) || null;
-  // Con una selección del menú se ve su familia completa (si tiene) o solo su SKU.
-  const grupoSel = grupos.find(g => g.id === (seleccion || '')) || null;
-  const idsVisibles = grupoSel ? (grupoSel.familia ? grupos.filter(g => g.familia === grupoSel.familia).map(g => g.id) : [grupoSel.id]) : null;
+  const seleccionado = (famSel ? famSel.virtual : productosV.find(p => p.id === selId)) || null;
+  // Filas del resumen. Sin selección: una por familia y una por SKU sin familia. Con una familia elegida:
+  // la familia y debajo sus SKU (informativos). Con un SKU sin familia: solo ese SKU.
+  const filasResumen = (() => {
+    const calc = p => ({ p, r: calcularModeloStock(p) });
+    if (seleccion) {
+      if (famSel) return [{ ...calc(famSel.virtual), tipo: 'familia', key: famSel.key }].concat(famSel.grupos.map(g => ({ ...calc(g.virtual), tipo: 'sku', key: famSel.key, factor: g.factor })));
+      const g = grupos.find(x => x.id === seleccion);
+      return g ? [{ ...calc(g.virtual), tipo: 'sku', key: g.id }] : [];
+    }
+    const out = []; const vistas = {};
+    grupos.forEach(g => {
+      if (g.familia) { if (vistas[g.familia]) return; vistas[g.familia] = true; const f = familias.find(x => x.nombre === g.familia); if (f) out.push({ ...calc(f.virtual), tipo: 'familia', key: f.key }); return; }
+      out.push({ ...calc(g.virtual), tipo: 'sku', key: g.id });
+    });
+    return out;
+  })();
   const rSeleccionado = seleccionado ? calcularModeloStock(seleccionado) : null;
   const alertaSeleccionado = seleccionado ? nivelAlerta(seleccionado, rSeleccionado) : null;
   return /*#__PURE__*/React.createElement("div", {
@@ -4417,7 +4501,7 @@ function StockPanel({
       margin: 0,
       color: 'var(--text-primary)'
     }
-  }, seleccion ? (grupoSel && grupoSel.familia ? "Familia " + grupoSel.familia : "Producto seleccionado") : "Resumen — todos los productos"), /*#__PURE__*/React.createElement("div", {
+  }, seleccion ? (famSel ? "Familia " + famSel.nombre : "Producto seleccionado") : "Resumen — todos los productos"), /*#__PURE__*/React.createElement("div", {
     style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }
   }, /*#__PURE__*/React.createElement("button", {
     className: "add-btn sync-btn",
@@ -4436,19 +4520,26 @@ function StockPanel({
   errStock && /*#__PURE__*/React.createElement("div", { className: "competencia-error" }, errStock),
   /*#__PURE__*/React.createElement("div", {
     className: "stock-resumen-list"
-  }, resultadosPorProducto.length === 0 && /*#__PURE__*/React.createElement("div", {
+  }, filasResumen.length === 0 && /*#__PURE__*/React.createElement("div", {
     className: "sub-empty"
   }, "Sin productos cargados todavía."),
-  (idsVisibles ? resultadosPorProducto.filter(x => idsVisibles.includes(x.p.id)) : resultadosPorProducto).map(({
+  filasResumen.map(({
     p,
-    r
-  }) => /*#__PURE__*/React.createElement(ResumenStockRow, {
-    key: p.id,
-    p: p,
-    r: r,
-    activo: p.id === selectedId,
-    onClick: () => setSelectedId(p.id)
-  }))), !seleccionado && /*#__PURE__*/React.createElement("div", {
+    r,
+    tipo,
+    key,
+    factor
+  }) => tipo === 'sku' && famSel && seleccion
+    ? /*#__PURE__*/React.createElement("div", { key: 'sku-' + p.id, className: "stock-resumen-row", style: { opacity: 0.85, paddingLeft: 28, cursor: 'default' } },
+        /*#__PURE__*/React.createElement("span", { className: "stock-resumen-nombre" }, p.etiqueta || p.nombre),
+        /*#__PURE__*/React.createElement("span", { className: "stock-resumen-dato" }, "Ventas 6 m: ", /*#__PURE__*/React.createElement("b", null, (p.ventasMensuales || []).reduce((t, v) => t + (Number(v.unidades) || 0), 0)), factor > 1 ? ' × ' + factor + ' collares' : ''))
+    : /*#__PURE__*/React.createElement(ResumenStockRow, {
+        key: tipo + '-' + (key || p.id),
+        p: p,
+        r: r,
+        activo: (famSel ? key === famSel.key : p.id === selId) && tipo !== 'sku-info',
+        onClick: () => setSelectedId(tipo === 'familia' ? key : p.id)
+      }))), !seleccionado && /*#__PURE__*/React.createElement("div", {
     className: "data-note"
   }, "Elegí un producto en el menú de la izquierda (o agregá uno nuevo) para ver y editar el detalle."), seleccionado && /*#__PURE__*/React.createElement(React.Fragment, null, alertaSeleccionado === 'red' && rSeleccionado && /*#__PURE__*/React.createElement("div", {
     className: "alert-banner"
@@ -4460,7 +4551,12 @@ function StockPanel({
     size: 18
   }), /*#__PURE__*/React.createElement("span", null, "Pre-alerta — Total Disponible (", rSeleccionado.totalDisponible, ") está por debajo del umbral de aviso (", seleccionado.preMinAlerta, "). Arrancá a negociar con el proveedor.")), /*#__PURE__*/React.createElement("div", {
     className: "stock-detalle-header"
-  }, (seleccionado.sku || '').trim() ? /*#__PURE__*/React.createElement("div", {
+  }, seleccionado._esFamilia ? /*#__PURE__*/React.createElement("div", {
+    style: { flex: '1 1 auto', minWidth: 0 }
+  }, /*#__PURE__*/React.createElement("h3", { className: "costo-card-title costo-card-sku", style: { margin: 0 } }, 'Familia ' + seleccionado.familia),
+    /*#__PURE__*/React.createElement("div", { className: "muted", style: { fontSize: 12 } },
+      famSel.grupos.length + ' SKU que comparten el mismo stock y los mismos lotes · la demanda es la suma de todos (pack x2 = 2 collares, pack x3 = 3)'))
+  : (seleccionado.sku || '').trim() ? /*#__PURE__*/React.createElement("div", {
     style: { flex: '1 1 auto', minWidth: 0 }
   }, /*#__PURE__*/React.createElement("h3", { className: "costo-card-title costo-card-sku", style: { margin: 0 } }, seleccionado.sku),
     /*#__PURE__*/React.createElement("div", { className: "muted", style: { fontSize: 12 } },
@@ -4477,7 +4573,7 @@ function StockPanel({
     value: pc.nombre
   }, pc.nombre || '(sin nombre)')), seleccionado.nombre && !productosCostos.some(pc => pc.nombre === seleccionado.nombre) && /*#__PURE__*/React.createElement("option", {
     value: seleccionado.nombre
-  }, seleccionado.nombre, " (no está en Costos)")), /*#__PURE__*/React.createElement("button", {
+  }, seleccionado.nombre, " (no está en Costos)")), !seleccionado._esFamilia && /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "icon-btn",
     onClick: () => removeProducto(seleccionado.id),
@@ -4522,7 +4618,30 @@ function StockPanel({
     className: "kpi-sub"
   }, rSeleccionado.cantidadAPedir > 0 ? `≈ US$${rSeleccionado.capitalAInvertir.toLocaleString('es-AR')}` : 'sin necesidad de pedir'))) : /*#__PURE__*/React.createElement("div", {
     className: "data-note"
-  }, "Cargá al menos 3 meses con Días con Stock ", '>', " 0 y al menos 1 envío con fecha de pago y fecha disponible para vender, para que el modelo calcule."), /*#__PURE__*/React.createElement("div", {
+  }, "Cargá al menos 3 meses con Días con Stock ", '>', " 0 y al menos 1 envío con fecha de pago y fecha disponible para vender, para que el modelo calcule."),
+  famSel && (() => {
+    const h = React.createElement;
+    const d = famSel.detalle;
+    const publicadoPropio = d.filter(x => !x.esFull).reduce((t, x) => t + x.publicado * x.factor, 0);
+    const deposito = rSeleccionado ? rSeleccionado.enDepositoPropio : 0;
+    const totalEq = d.reduce((t, x) => t + x.equivalentes, 0);
+    return h('div', { className: 'table-section' },
+      h('div', { className: 'table-section-header' }, h('h2', null, 'SKU de la familia (mismo stock)')),
+      h('div', { className: 'table-scroll' }, h('table', null,
+        h('thead', null, h('tr', null, h('th', null, 'SKU'), h('th', null, 'Despacho'), h('th', null, 'Stock que muestra ML'), h('th', null, 'Ventas 6 m (unid.)'), h('th', null, 'Collares por venta'), h('th', null, 'Collares equivalentes'))),
+        h('tbody', null, d.map(x => h('tr', { key: x.sku },
+          h('td', null, x.sku),
+          h('td', null, x.esFull ? 'FULL' : (famSel.sabeLogistica ? 'Despacho propio' : '—')),
+          h('td', null, x.esFull ? x.publicado + ' (FULL real)' : x.publicado + ' (configurado)'),
+          h('td', null, x.ventas),
+          h('td', null, '× ' + x.factor),
+          h('td', null, x.equivalentes))),
+          h('tr', { key: 'tot' }, h('td', null, h('b', null, 'Total')), h('td'), h('td'), h('td'), h('td'), h('td', null, h('b', null, totalEq)))))),
+      h('div', { className: publicadoPropio > deposito ? 'data-note aviso-rojo' : 'sub-empty', style: { marginTop: 8 } },
+        'Stock que las publicaciones de despacho propio muestran en Mercado Libre: ' + publicadoPropio + ' collares equivalentes · en tu depósito: ' + deposito +
+        (publicadoPropio > deposito ? ' → las publicaciones muestran más de lo que hay: riesgo de sobreventa.' : ' → alcanza.')));
+  })(),
+  /*#__PURE__*/React.createElement("div", {
     className: "table-section"
   }, /*#__PURE__*/React.createElement("div", {
     className: "table-section-header"
@@ -6597,14 +6716,16 @@ function JopexPanel() {
   })();
   const subStock = (() => {
     const gs = agruparStock(stockProductos, productos);
-    const alertaDe = g => { const r = calcularModeloStock(g.virtual); return !!(r && r.totalDisponible < r.Min); };
+    const fams = agruparFamiliasStock(gs);
+    const alertaDe = v => { const r = calcularModeloStock(v); return !!(r && r.totalDisponible < r.Min); };
     const items = [];
-    const porFamilia = {};
+    const vistas = {};
     gs.forEach(g => {
-      if (!g.familia) { items.push({ id: g.id, label: ((g.sku || g.virtual.nombre) || '(sin nombre)').slice(0, 34), alerta: alertaDe(g) }); return; }
-      if (porFamilia[g.familia]) { const it = porFamilia[g.familia]; it.alerta = it.alerta || alertaDe(g); it.n++; it.label = g.familia.slice(0, 28) + ' · ' + it.n + ' SKU'; return; }
-      porFamilia[g.familia] = { id: g.id, label: g.familia.slice(0, 28) + ' · 1 SKU', alerta: alertaDe(g), n: 1 };
-      items.push(porFamilia[g.familia]);
+      if (!g.familia) { items.push({ id: g.id, label: ((g.sku || g.virtual.nombre) || '(sin nombre)').slice(0, 34), alerta: alertaDe(g.virtual) }); return; }
+      if (vistas[g.familia]) return;
+      vistas[g.familia] = true;
+      const f = fams.find(x => x.nombre === g.familia);
+      items.push({ id: f.key, label: g.familia.slice(0, 28) + ' · ' + f.grupos.length + ' SKU', alerta: alertaDe(f.virtual) });
     });
     return items;
   })();
