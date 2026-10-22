@@ -267,12 +267,13 @@ module.exports = (app) => {
       const lista = camp.ok ? (Array.isArray(camp.data) ? camp.data : camp.data?.results || []) : [];
       out.en_campanas = await enTandas(lista, 4, async (c) => {
         const r = await intento(`${API}/seller-promotions/promotions/${c.id}/items`, {
-          promotion_type: c.type, app_version: 'v2', limit: 100,
+          promotion_type: c.type, app_version: 'v2', item_id: itemId, limit: 49,
         });
         if (!r.ok) return { id: c.id, nombre: c.name, tipo: c.type, estado_campana: c.status, error: r.error };
         const filas = Array.isArray(r.data) ? r.data : r.data?.results || [];
         const mias = filas.filter((x) => x.id === itemId || (upid && x.id === upid));
-        return {
+        // Si ML no filtra por item_id, se devuelven solo las primeras filas; 'paging' ayuda a ver si hay más.
+        return { paging: r.data?.paging || null,
           id: c.id, nombre: c.name, tipo: c.type, estado_campana: c.status,
           desde: c.start_date || null, hasta: c.finish_date || null,
           items_en_campana: filas.length, aparece: mias,
