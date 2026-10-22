@@ -1383,6 +1383,54 @@ function fechaHoraCorta(iso) {
   const dd = n => String(n).padStart(2, '0');
   return dd(d.getDate()) + '/' + dd(d.getMonth() + 1) + ' ' + dd(d.getHours()) + ':' + dd(d.getMinutes());
 }
+// ---------- Stock agrupado por SKU y familia (mismos nombres que en Costos) ----------
+// En Mercado Libre las 3 publicaciones de un SKU comparten el mismo stock (el mismo inventario en
+// FULL), pero cada una vende por separado. Por eso, por SKU: el stock se toma UNA vez (el mayor
+// informado) y las ventas se SUMAN. Los datos propios del SKU (envíos, lotes, conteo, tiempos) viven en
+// la publicación "principal": la que ya los tiene cargados, o la primera.
+function consolidarStock(ms, sku) {
+  if (ms.length === 1) return { ...ms[0], etiqueta: sku || ms[0].nombre, sku: sku || '', _miembros: [ms[0].id] };
+  const tieneDatos = m => (m.envios || []).length > 0 || (m.stockFisicoBase !== '' && m.stockFisicoBase != null);
+  const prim = ms.find(tieneDatos) || ms[0];
+  const num = v => (v === '' || v == null || isNaN(v) ? 0 : Number(v));
+  const stockFull = ms.every(m => m.stockFull === '' || m.stockFull == null) ? prim.stockFull : Math.max(...ms.map(m => num(m.stockFull)));
+  const porMes = {};
+  ms.forEach(m => (m.ventasMensuales || []).forEach(v => {
+    const k = (v.mes || '') + '|' + (v.anio || '');
+    const a = porMes[k] || (porMes[k] = { id: 'vmg:' + k, mes: v.mes, anio: v.anio, unidades: 0, dias: 0 });
+    a.unidades += num(v.unidades);
+    a.dias = Math.max(a.dias, num(v.dias));
+  }));
+  const porDia = {};
+  ms.forEach(m => (m.ventasDiarias || []).forEach(d => { porDia[d.fecha] = (porDia[d.fecha] || 0) + num(d.unidades); }));
+  return {
+    ...prim,
+    etiqueta: sku || prim.nombre,
+    sku: sku || '',
+    stockFull,
+    vendidasFull: ms.reduce((t, m) => t + num(m.vendidasFull), 0),
+    vendidasPropias: ms.reduce((t, m) => t + num(m.vendidasPropias), 0),
+    ventasMensuales: Object.values(porMes),
+    ventasDiarias: Object.keys(porDia).sort().map(f => ({ fecha: f, unidades: porDia[f] })),
+    _miembros: ms.map(m => m.id)
+  };
+}
+function agruparStock(stockProductos, costosProductos) {
+  const info = {};
+  (costosProductos || []).forEach(c => { if (c.mlItemId) info[c.mlItemId] = { sku: (c.sku || '').trim(), familia: (c.familia || '').trim() }; });
+  const grupos = [];
+  const idx = {};
+  (stockProductos || []).forEach(sp => {
+    const inf = (sp.mlItemId && info[sp.mlItemId]) || { sku: '', familia: '' };
+    const k = inf.sku.toUpperCase();
+    if (!k) { grupos.push({ clave: '', sku: '', familia: '', miembros: [sp] }); return; }
+    if (idx[k] == null) { idx[k] = grupos.length; grupos.push({ clave: k, sku: inf.sku, familia: inf.familia, miembros: [] }); }
+    grupos[idx[k]].miembros.push(sp);
+    if (!grupos[idx[k]].familia && inf.familia) grupos[idx[k]].familia = inf.familia;
+  });
+  grupos.forEach(g => { g.virtual = consolidarStock(g.miembros, g.sku); g.id = g.virtual.id; });
+  return grupos;
+}
 // Lo que queda con un precio de venta dado (el cargo fijo de ML se resuelve según ese precio).
 function margenConPrecio(precio, p, costo, tasasCuotas) {
   const cu = p.cuotas || '6';
@@ -3907,7 +3955,7 @@ function ResumenStockRow({
     className: `stock-dot stock-dot-${nivel || 'gray'}`
   }), /*#__PURE__*/React.createElement("span", {
     className: "stock-resumen-nombre"
-  }, p.nombre || '(sin nombre)'), r ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+  }, p.etiqueta || p.nombre || '(sin nombre)'), r ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
     className: "stock-resumen-dato"
   }, "Disp: ", /*#__PURE__*/React.createElement("b", null, r.totalDisponible)), /*#__PURE__*/React.createElement("span", {
     className: "stock-resumen-dato"
@@ -4079,6 +4127,10 @@ function StockPanel({
   seleccion,
   cotizaciones
 }) {
+  // Vista por SKU: 'productos' sigue siendo la lista cruda (una por publicación) y es la que editan los
+  // handlers; 'productosV' es la consolidada (una por SKU) que se muestra.
+  const grupos = agruparStock(productos, productosCostos);
+  const productosV = grupos.map(g => g.virtual);
   const [envioAbierto, setEnvioAbierto] = useState(null);
   const [selInterno, setSelInterno] = useState(STOCK_PRODUCTOS_INICIAL[0]?.id || null);
   // La selección del menú lateral manda; si no hay, vale la interna.
@@ -4205,6 +4257,14 @@ function StockPanel({
     } : p));
   };
   const updateVenta = (prodId, ventaId, field, value) => {
+    if (String(ventaId).startsWith('vmg:')) {
+      // Fila consolidada: solo "días con stock" se edita, y se aplica a todas las publicaciones del SKU.
+      const g = grupos.find(x => x.id === prodId); const key = String(ventaId).slice(4);
+      if (!g || field !== 'dias') return;
+      const ids = g.miembros.map(m => m.id);
+      setProductos(prev => prev.map(p => !ids.includes(p.id) ? p : { ...p, ventasMensuales: (p.ventasMensuales || []).map(v => ((v.mes || '') + '|' + (v.anio || '')) === key ? { ...v, dias: value } : v) }));
+      return;
+    }
     setProductos(prev => prev.map(p => p.id !== prodId ? p : {
       ...p,
       ventasMensuales: p.ventasMensuales.map(v => v.id === ventaId ? {
@@ -4225,6 +4285,13 @@ function StockPanel({
     }));
   };
   const removeVenta = (prodId, ventaId) => {
+    if (String(ventaId).startsWith('vmg:')) {
+      const g = grupos.find(x => x.id === prodId); const key = String(ventaId).slice(4);
+      if (!g) return;
+      const ids = g.miembros.map(m => m.id);
+      setProductos(prev => prev.map(p => !ids.includes(p.id) ? p : { ...p, ventasMensuales: (p.ventasMensuales || []).filter(v => ((v.mes || '') + '|' + (v.anio || '')) !== key) }));
+      return;
+    }
     setProductos(prev => prev.map(p => p.id !== prodId ? p : {
       ...p,
       ventasMensuales: p.ventasMensuales.filter(v => v.id !== ventaId)
@@ -4314,11 +4381,14 @@ function StockPanel({
       ventasSemanales: (p.ventasSemanales || []).filter(v => v.id !== ventaId)
     }));
   };
-  const resultadosPorProducto = productos.map(p => ({
+  const resultadosPorProducto = productosV.map(p => ({
     p,
     r: calcularModeloStock(p)
   }));
-  const seleccionado = productos.find(p => p.id === selectedId) || null;
+  const seleccionado = productosV.find(p => p.id === selectedId) || null;
+  // Con una selección del menú se ve su familia completa (si tiene) o solo su SKU.
+  const grupoSel = grupos.find(g => g.id === (seleccion || '')) || null;
+  const idsVisibles = grupoSel ? (grupoSel.familia ? grupos.filter(g => g.familia === grupoSel.familia).map(g => g.id) : [grupoSel.id]) : null;
   const rSeleccionado = seleccionado ? calcularModeloStock(seleccionado) : null;
   const alertaSeleccionado = seleccionado ? nivelAlerta(seleccionado, rSeleccionado) : null;
   return /*#__PURE__*/React.createElement("div", {
@@ -4338,7 +4408,7 @@ function StockPanel({
       margin: 0,
       color: 'var(--text-primary)'
     }
-  }, seleccion ? "Producto seleccionado" : "Resumen — todos los productos"), /*#__PURE__*/React.createElement("div", {
+  }, seleccion ? (grupoSel && grupoSel.familia ? "Familia " + grupoSel.familia : "Producto seleccionado") : "Resumen — todos los productos"), /*#__PURE__*/React.createElement("div", {
     style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }
   }, /*#__PURE__*/React.createElement("button", {
     className: "add-btn sync-btn",
@@ -4360,7 +4430,7 @@ function StockPanel({
   }, resultadosPorProducto.length === 0 && /*#__PURE__*/React.createElement("div", {
     className: "sub-empty"
   }, "Sin productos cargados todavía."),
-  (seleccion ? resultadosPorProducto.filter(x => x.p.id === seleccion) : resultadosPorProducto).map(({
+  (idsVisibles ? resultadosPorProducto.filter(x => idsVisibles.includes(x.p.id)) : resultadosPorProducto).map(({
     p,
     r
   }) => /*#__PURE__*/React.createElement(ResumenStockRow, {
@@ -4381,7 +4451,13 @@ function StockPanel({
     size: 18
   }), /*#__PURE__*/React.createElement("span", null, "Pre-alerta — Total Disponible (", rSeleccionado.totalDisponible, ") está por debajo del umbral de aviso (", seleccionado.preMinAlerta, "). Arrancá a negociar con el proveedor.")), /*#__PURE__*/React.createElement("div", {
     className: "stock-detalle-header"
-  }, /*#__PURE__*/React.createElement("select", {
+  }, (seleccionado.sku || '').trim() ? /*#__PURE__*/React.createElement("div", {
+    style: { flex: '1 1 auto', minWidth: 0 }
+  }, /*#__PURE__*/React.createElement("h3", { className: "costo-card-title costo-card-sku", style: { margin: 0 } }, seleccionado.sku),
+    /*#__PURE__*/React.createElement("div", { className: "muted", style: { fontSize: 12 } },
+      ((grupos.find(g => g.id === seleccionado.id) || {}).familia ? 'Familia ' + grupos.find(g => g.id === seleccionado.id).familia + ' · ' : '') +
+      ((grupos.find(g => g.id === seleccionado.id) || { miembros: [] }).miembros.length) + ' publicaciones · stock compartido, ventas sumadas'))
+  : /*#__PURE__*/React.createElement("select", {
     className: "costo-card-title stock-producto-title stock-producto-select",
     value: seleccionado.nombre,
     onChange: e => setCampo(seleccionado.id, 'nombre', e.target.value)
@@ -4454,12 +4530,15 @@ function StockPanel({
     }, /*#__PURE__*/React.createElement("input", {
       type: "text",
       value: v.mes,
+      readOnly: String(v.id).startsWith('vmg:'),
       onChange: e => updateVenta(seleccionado.id, v.id, 'mes', e.target.value)
     })), /*#__PURE__*/React.createElement("td", {
       className: "editable-cell"
     }, /*#__PURE__*/React.createElement("input", {
       type: "number",
       value: v.unidades,
+      readOnly: String(v.id).startsWith('vmg:'),
+      title: String(v.id).startsWith('vmg:') ? 'Suma de las publicaciones del SKU (se actualiza al sincronizar)' : undefined,
       onChange: e => updateVenta(seleccionado.id, v.id, 'unidades', e.target.value)
     })), /*#__PURE__*/React.createElement("td", {
       className: "editable-cell"
@@ -4588,7 +4667,7 @@ function StockPanel({
     }, /*#__PURE__*/React.createElement(EnvioDetalle, {
       p: seleccionado,
       e: e,
-      todos: productos,
+      todos: productosV,
       cotizaciones: cotizaciones,
       onUpdate: (campo, valor) => updateEnvio(seleccionado.id, e.id, campo, valor),
       onLink: (leg, destProdId, destino) => linkEnvio(seleccionado.id, e.id, leg, destProdId, destino)
@@ -6503,14 +6582,19 @@ function JopexPanel() {
     });
     return items;
   })();
-  const subStock = stockProductos.map(p => {
-    const r = calcularModeloStock(p);
-    return {
-      id: p.id,
-      label: (p.nombre || '(sin nombre)').slice(0, 34),
-      alerta: !!(r && r.totalDisponible < r.Min)
-    };
-  });
+  const subStock = (() => {
+    const gs = agruparStock(stockProductos, productos);
+    const alertaDe = g => { const r = calcularModeloStock(g.virtual); return !!(r && r.totalDisponible < r.Min); };
+    const items = [];
+    const porFamilia = {};
+    gs.forEach(g => {
+      if (!g.familia) { items.push({ id: g.id, label: ((g.sku || g.virtual.nombre) || '(sin nombre)').slice(0, 34), alerta: alertaDe(g) }); return; }
+      if (porFamilia[g.familia]) { const it = porFamilia[g.familia]; it.alerta = it.alerta || alertaDe(g); it.n++; it.label = g.familia.slice(0, 28) + ' · ' + it.n + ' SKU'; return; }
+      porFamilia[g.familia] = { id: g.id, label: g.familia.slice(0, 28) + ' · 1 SKU', alerta: alertaDe(g), n: 1 };
+      items.push(porFamilia[g.familia]);
+    });
+    return items;
+  })();
   // El submenú de Ads lista las CAMPAÑAS sincronizadas de Mercado Ads,
   // igual que la pantalla de campañas de ML. Sin sincronizar, no hay submenú.
   const campanasSync = (adsCfg.sync && adsCfg.sync.campanas) || [];
