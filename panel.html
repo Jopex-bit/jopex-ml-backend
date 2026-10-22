@@ -3805,6 +3805,8 @@ function diasEntreFechas(f1, f2) {
 function fechaDisponibleEnvio(e) {
   return e.vendePorFull ? e.fechaLlegadaFull : e.fechaLlegadaDeposito;
 }
+// Días después de los cuales un despacho a FULL sin fecha de llegada se da por recibido.
+const DIAS_FULL_SIN_LLEGADA = 30;
 function calcularModeloStock(p) {
   const ritmos = p.ventasMensuales.filter(m => Number(m.dias) > 0).map(m => ({
     ...m,
@@ -3851,6 +3853,7 @@ function calcularModeloStock(p) {
   // Más un cuarto: lotes de importación que aún no llegaron al país.
   let ordenesEnTransito = 0;      // importación en curso
   let enCaminoAFull = 0;          // despachado a FULL, sin llegada confirmada
+  let fullSupuestas = 0;          // despachado a FULL hace mucho, sin fecha de llegada: se asume recibido
   let llegadasDespuesDelConteo = 0;
   let recibidasTotal = 0;
   let despachadoAFullTotal = 0;
@@ -3870,7 +3873,12 @@ function calcularModeloStock(p) {
       // o todavía no pasó, siguen en camino y ML no las cuenta.
       const fll = e.fechaLlegadaFull ? new Date(e.fechaLlegadaFull + 'T00:00:00') : null;
       const llegoAFull = fll && fll <= hoy;
-      if (aFull > 0 && !llegoAFull) enCaminoAFull += aFull;
+      // Si no hay fecha de llegada pero se despachó a FULL hace más de 30 días, se asume que ya llegó
+      // (ML ya lo cuenta en el stock de FULL; si no, se contaría dos veces) y se avisa para cargar la fecha real.
+      const fdespFull = e.fechaDespachoFull ? new Date(e.fechaDespachoFull + 'T00:00:00') : null;
+      const supuestaLlegada = !fll && fdespFull && (hoy - fdespFull) / 86400000 > DIAS_FULL_SIN_LLEGADA;
+      if (aFull > 0 && !llegoAFull && !supuestaLlegada) enCaminoAFull += aFull;
+      if (aFull > 0 && supuestaLlegada) fullSupuestas += aFull;
       if (fechaBase && fd > fechaBase) llegadasDespuesDelConteo += Math.max(0, cant - aFull);
     } else {
       ordenesEnTransito += cant;
@@ -3917,6 +3925,7 @@ function calcularModeloStock(p) {
     stockFull,
     enDepositoPropio,
     enCaminoAFull,
+    fullSupuestas,
     despachadoAFullTotal,
     recibidasTotal,
     depositoSugerido,
@@ -4481,7 +4490,11 @@ function StockPanel({
       marginTop: -8,
       marginBottom: 16
     }
-  }, "La lista sale directo de los productos que ya cargaste en Costos, para que el nombre coincida siempre entre los dos módulos."), rSeleccionado ? /*#__PURE__*/React.createElement("div", {
+  }, "La lista sale directo de los productos que ya cargaste en Costos, para que el nombre coincida siempre entre los dos módulos."),
+  rSeleccionado && rSeleccionado.fullSupuestas > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "data-note", style: { marginTop: -4, marginBottom: 16 }
+  }, rSeleccionado.fullSupuestas + " unidades se despacharon a FULL hace más de " + DIAS_FULL_SIN_LLEGADA + " días y el envío no tiene fecha de llegada a FULL: se asumen ya recibidas (Mercado Libre ya las cuenta en el stock de FULL). Cargá la fecha real en el envío para quitar este aviso."),
+  rSeleccionado ? /*#__PURE__*/React.createElement("div", {
     className: "kpi-row"
   }, /*#__PURE__*/React.createElement("div", {
     className: `kpi-card ${alertaSeleccionado === 'red' ? 'kpi-red' : alertaSeleccionado === 'amber' ? 'kpi-amber' : 'kpi-green'}`
