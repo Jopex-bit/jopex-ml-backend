@@ -92,6 +92,48 @@ module.exports = (app) => {
         campanas = [];
       }
 
+      // ---- 3b) Ofertas por campaña (relámpago, ofertas, etc.) ----
+      // Las ofertas relámpago no figuran en la lista de promociones de cada ítem: viven en la campaña.
+      // Se lee cada campaña vigente o próxima UNA vez (paginada) y se cruza por ID de publicación.
+      const TIPOS_OFERTA = new Set(['LIGHTNING', 'SMART_LIGHTNING', 'DEAL', 'SMART', 'PRICE_DISCOUNT', 'UNHEALTHY_STOCK']);
+      const ofertasPorItem = {};
+      try {
+        await enTandas(
+          campanas.filter((c) => TIPOS_OFERTA.has(c.tipo) && (c.estado === 'started' || c.estado === 'pending')),
+          3,
+          async (c) => {
+            let searchAfter = null;
+            for (let pag = 0; pag < 12; pag++) {
+              let r;
+              try {
+                r = await axios.get(`${API}/seller-promotions/promotions/${c.id}/items`, {
+                  ...auth,
+                  params: { promotion_type: c.tipo, app_version: 'v2', limit: 49, ...(searchAfter ? { search_after: searchAfter } : {}) },
+                });
+              } catch (e) { break; }
+              const filas = Array.isArray(r.data) ? r.data : r.data?.results || [];
+              filas.forEach((x) => {
+                if (!x.id || !(x.status === 'started' || x.status === 'pending') || !(x.price > 0)) return;
+                (ofertasPorItem[x.id] = ofertasPorItem[x.id] || []).push({
+                  campana: c.nombre || c.tipo,
+                  tipo: c.tipo,
+                  estado: x.status,
+                  precio: x.price,
+                  precio_original: x.original_price ?? null,
+                  desde: x.start_date || null,
+                  hasta: x.finish_date || x.end_date || null,
+                  stock: x.stock?.remaining_stock ?? null,
+                  meli_pct: x.meli_percentage ?? null,
+                  vendedor_pct: x.seller_percentage ?? null,
+                });
+              });
+              searchAfter = r.data?.paging?.searchAfter || r.data?.paging?.search_after || null;
+              if (!searchAfter || !filas.length) break;
+            }
+          }
+        );
+      } catch (e) { /* si falla, se sigue con lo que informa cada ítem */ }
+
       // ---- 4) Por cada publicación: comisión + envío + promociones ----
       const skuDe = (attrs) => {
         const a = (attrs || []).find((x) => x.id === 'SELLER_SKU');
@@ -206,6 +248,28 @@ module.exports = (app) => {
           }
         } catch (e) {
           p.avisos.push('No se pudieron leer las promociones: ' + (e.response?.data?.message || e.message));
+        }
+
+        // --- Ofertas de campaña (relámpago, etc.): vigentes ahora y programadas ---
+        {
+          const o = ofertasPorItem[b.id] || [];
+          const dpct = (orig, precio) => (orig > 0 && precio > 0 ? Number((((orig - precio) / orig) * 100).toFixed(2)) : null);
+          const conPct = (x) => ({ ...x, precio_original: x.precio_original ?? b.price, descuento_pct: dpct(x.precio_original ?? b.price, x.precio) });
+          const ahora = o.filter((x) => x.estado === 'started').sort((x, y) => x.precio - y.precio).map(conPct);
+          const prog = o.filter((x) => x.estado === 'pending').sort((x, y) => String(x.desde).localeCompare(String(y.desde))).map(conPct);
+          p.promos_ahora = ahora;
+          p.promos_programadas = prog.slice(0, 12);
+          if (!p.promocion && ahora[0]) {
+            p.promocion = {
+              tipo: ahora[0].tipo,
+              precio_promo: ahora[0].precio,
+              precio_original: ahora[0].precio_original,
+              descuento_pct: ahora[0].descuento_pct,
+              desde: soloFecha(ahora[0].desde),
+              hasta: soloFecha(ahora[0].hasta),
+              campana: ahora[0].campana,
+            };
+          }
         }
 
         return p;

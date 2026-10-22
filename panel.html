@@ -1364,6 +1364,25 @@ function gruposVisibles(grupos, seleccion) {
   const fam = familiaDe(sel);
   return fam ? grupos.filter(g => familiaDe(g) === fam) : [sel];
 }
+// ---------- Promociones sincronizadas desde Mercado Libre ----------
+// 'promoAhora' = la oferta vigente con menor precio; 'promosProgramadas' = las próximas franjas.
+// Si la oferta ya terminó desde la última sincronización, no se usa.
+function promoVigente(m) {
+  const a = m && m.promoAhora;
+  if (!a || !(Number(a.precio) > 0)) return null;
+  if (a.hasta && new Date(a.hasta).getTime() < Date.now()) return null;
+  return a;
+}
+function promosProximas(m) {
+  return ((m && m.promosProgramadas) || []).filter(x => x && x.desde && new Date(x.desde).getTime() > Date.now());
+}
+function fechaHoraCorta(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso).slice(0, 16).replace('T', ' ');
+  const dd = n => String(n).padStart(2, '0');
+  return dd(d.getDate()) + '/' + dd(d.getMonth() + 1) + ' ' + dd(d.getHours()) + ':' + dd(d.getMinutes());
+}
 // Lo que queda con un precio de venta dado (el cargo fijo de ML se resuelve según ese precio).
 function margenConPrecio(precio, p, costo, tasasCuotas) {
   const cu = p.cuotas || '6';
@@ -1459,7 +1478,10 @@ function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate
     const mp = costoOk && pub > 0 ? margenConPrecio(pub, pe, costo, tasasCuotas) : null;
     const pm = Number(m.precioManual);
     const mm = costoOk && pm > 0 ? margenConPrecio(pm, pe, costo, tasasCuotas) : null;
-    return { m, cond, cuotas, r, pub, mp, pm, mm, obj: Number(m.mgUtilidad) || 0 };
+    const promo = promoVigente(m);
+    const mpromo = costoOk && promo ? margenConPrecio(Number(promo.precio), pe, costo, tasasCuotas) : null;
+    const prox = promosProximas(m);
+    return { m, cond, cuotas, r, pub, mp, pm, mm, promo, mpromo, prox, obj: Number(m.mgUtilidad) || 0 };
   });
   const cuotaTxt = c => c === 'sin' ? 'Contado' : c + ' cuotas';
 
@@ -1511,13 +1533,22 @@ function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate
             h('table', { className: 'grupo-tabla' },
               h('thead', null, h('tr', null,
                 h('th', null, 'Condición'), h('th', null, 'Precio sugerido'), h('th', null, 'Publicado en ML'),
-                h('th', null, 'Margen real al publicado'), h('th', null, 'Precio manual'), h('th', null, 'Margen con precio manual'), h('th', null))),
+                h('th', null, 'Promo vigente'), h('th', null, 'Margen real ahora'), h('th', null, 'Margen sin promo'),
+                h('th', null, 'Precio manual'), h('th', null, 'Margen con precio manual'), h('th', null))),
               h('tbody', null, filas.map(f => h('tr', { key: f.m.id },
                 h('td', null,
                   h('b', null, f.cond ? f.cond.label : 'Publicación'),
-                  h('div', { className: 'muted', style: { fontSize: 11 } }, (f.m.mlItemId || 'sin publicar') + (tres ? '' : ' · ' + cuotaTxt(f.cuotas)))),
+                  h('div', { className: 'muted', style: { fontSize: 11 } }, (f.m.mlItemId || 'sin publicar') + (tres ? '' : ' · ' + cuotaTxt(f.cuotas))),
+                  f.prox.length > 0 && h('div', { className: 'muted', style: { fontSize: 11 }, title: f.prox.map(x => fechaHoraCorta(x.desde) + ' → ' + fechaHoraCorta(x.hasta) + ' · ' + money(x.precio)).join('\n') },
+                    f.prox.length + ' oferta' + (f.prox.length > 1 ? 's' : '') + ' programada' + (f.prox.length > 1 ? 's' : '') + ' · próxima ' + fechaHoraCorta(f.prox[0].desde))),
                 h('td', null, f.r && !f.r.error ? money(f.r.precio) : '—'),
                 h('td', null, f.pub > 0 ? money(f.pub) : '—'),
+                h('td', null, f.promo
+                  ? h('div', null, h('b', null, money(Number(f.promo.precio))), (f.promo.descuento_pct != null ? ' (−' + pct(f.promo.descuento_pct) + ')' : ''),
+                      h('div', { className: 'muted', style: { fontSize: 11 } }, (f.promo.campana || f.promo.tipo) + (f.promo.hasta ? ' · hasta ' + fechaHoraCorta(f.promo.hasta) : '')))
+                  : '—'),
+                h('td', { style: { fontWeight: 700, color: (f.mpromo || f.mp) ? colorMargen((f.mpromo || f.mp).margenPct, f.obj) : undefined } },
+                  (f.mpromo || f.mp) ? pct((f.mpromo || f.mp).margenPct) + ' · ' + money((f.mpromo || f.mp).margen) : '—'),
                 h('td', { style: { color: f.mp ? colorMargen(f.mp.margenPct, f.obj) : undefined } },
                   f.mp ? pct(f.mp.margenPct) + ' · ' + money(f.mp.margen) : '—'),
                 h('td', null, h('div', { className: 'calc-field-input' },
@@ -1530,7 +1561,7 @@ function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate
                   onClick: () => setAbierta(a => a === f.m.id ? '' : f.m.id)
                 }, abierta === f.m.id ? 'Cerrar' : 'Detalle')))))),
             h('p', { className: 'lineas-hint', style: { marginTop: 8 } },
-              'Márgenes con el costo de arriba y el envío y % de cargo del SKU. "Detalle" abre la tarjeta individual de esa publicación (promoción, proyección, etc.).'))),
+              'Márgenes con el costo de arriba y el envío y % de cargo del SKU. "Margen real ahora" usa la promoción vigente de Mercado Libre (se actualiza al sincronizar); sin promoción, el precio publicado. "Detalle" abre la tarjeta individual (promoción, proyección, etc.).'))),
     abierta && (() => {
       const m = g.miembros.find(x => x.id === abierta);
       return m ? h(ProductoCostoCard, {
@@ -1784,7 +1815,18 @@ function ProductoCostoCard({
               unitUsdPromo != null && h(CampoCalculado, { label: "Diferencia por la promo (USD)", value: moneyUsd((unitUsdPromo - unitUsd) * u) })));
   })(), /*#__PURE__*/React.createElement("div", {
     className: "promo-block"
-  }, /*#__PURE__*/React.createElement("h4", null, "Promoción vigente"), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("h4", null, "Promoción vigente"),
+  (() => {
+    const h = React.createElement;
+    const pv = promoVigente(p);
+    const prox = promosProximas(p);
+    if (!pv && !prox.length) return null;
+    const mp = pv && r && !r.error ? margenConPrecio(Number(pv.precio), { ...p, cuotas: p.cuotas || '6' }, r.costoProductoARS, tasasCuotas) : null;
+    return h('div', { className: 'data-note', style: { marginBottom: 10 } },
+      pv && h('div', null, h('b', null, 'Oferta vigente en Mercado Libre: '), money(Number(pv.precio)) + (pv.descuento_pct != null ? ' (−' + pct(pv.descuento_pct) + ')' : '') + ' · ' + (pv.campana || pv.tipo) + (pv.hasta ? ' · hasta ' + fechaHoraCorta(pv.hasta) : '') + (mp ? ' → margen real ' + pct(mp.margenPct) + ' · ' + money(mp.margen) : '')),
+      prox.length > 0 && h('div', null, h('b', null, 'Programadas: '), prox.map(x => fechaHoraCorta(x.desde) + '–' + fechaHoraCorta(x.hasta) + ' ' + money(x.precio)).join(' · ')));
+  })(),
+  /*#__PURE__*/React.createElement("div", {
     className: "promo-fields"
   }, /*#__PURE__*/React.createElement(CampoInput, {
     label: "% Promoción vigente",
@@ -2060,7 +2102,11 @@ function CostosPanel({
             // Solo pisamos el SKU si ML ya tiene uno cargado — si todavía está
             // vacío en ML, no queremos borrar lo que el usuario esté por guardar.
             ...(ml.sku ? { sku: ml.sku } : {}),
-            ...(ml.foto ? { foto: ml.foto } : {})
+            ...(ml.foto ? { foto: ml.foto } : {}),
+            // Ofertas de campaña (relámpago, etc.): la vigente con menor precio y las próximas.
+            // Se reemplazan en cada sincronización; sin oferta quedan vacías.
+            promoAhora: ml.promos_ahora && ml.promos_ahora[0] ? ml.promos_ahora[0] : null,
+            promosProgramadas: ml.promos_programadas || []
           };
           // Control: comparamos el cargo fijo que informa ML contra nuestra tabla.
           if (ml.cargo_fijo != null && ml.precio > 0) {
