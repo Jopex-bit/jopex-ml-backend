@@ -146,7 +146,9 @@ module.exports = (app) => {
               dias: {},
               unidades_total: 0,
               unidades_full: 0,      // vendidas y despachadas por FULL
-              unidades_propias: 0,   // vendidas y despachadas por vos
+              unidades_propias: 0,   // vendidas y despachadas por vos (retiro / correo)
+              unidades_flex: 0,      // despachadas por Flex (self_service: sale del depósito del courier)
+              dias_flex: {},
               unidades_sin_dato: 0,
             };
           }
@@ -157,6 +159,10 @@ module.exports = (app) => {
           const sid = o.shipping && o.shipping.id;
           const lt = sid ? tipoPorShipment[sid] : null;
           if (lt === 'fulfillment') porItem[id].unidades_full += q;
+          else if (lt === 'self_service') {
+            porItem[id].unidades_flex += q;
+            porItem[id].dias_flex[claveDia] = (porItem[id].dias_flex[claveDia] || 0) + q;
+          }
           else if (lt) porItem[id].unidades_propias += q;
           else porItem[id].unidades_sin_dato += q;
         });
@@ -193,6 +199,7 @@ module.exports = (app) => {
         // De dónde salió cada unidad vendida:
         unidades_vendidas_full: x.unidades_full,
         unidades_vendidas_propias: x.unidades_propias,
+        unidades_vendidas_flex: x.unidades_flex,
         unidades_vendidas_sin_dato: x.unidades_sin_dato,
         mensuales: serieMeses.map((m) => ({
           mes: m.mes,
@@ -207,6 +214,7 @@ module.exports = (app) => {
           dias_transcurridos: m.dias_transcurridos,
         })),
         diarias: Object.keys(x.dias).sort().map((f) => ({ fecha: f, unidades: x.dias[f] })),
+        diarias_flex: Object.keys(x.dias_flex).sort().map((f) => ({ fecha: f, unidades: x.dias_flex[f] })),
       }));
 
       const unidadesContadas = items.reduce((a, x) => a + x.unidades_total, 0);

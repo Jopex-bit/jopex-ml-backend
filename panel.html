@@ -1403,6 +1403,8 @@ function consolidarStock(ms, sku) {
   }));
   const porDia = {};
   ms.forEach(m => (m.ventasDiarias || []).forEach(d => { porDia[d.fecha] = (porDia[d.fecha] || 0) + num(d.unidades); }));
+  const porDiaFlex = {};
+  ms.forEach(m => (m.ventasDiariasFlex || []).forEach(d => { porDiaFlex[d.fecha] = (porDiaFlex[d.fecha] || 0) + num(d.unidades); }));
   return {
     ...prim,
     etiqueta: sku || prim.nombre,
@@ -1410,6 +1412,8 @@ function consolidarStock(ms, sku) {
     stockFull,
     vendidasFull: ms.reduce((t, m) => t + num(m.vendidasFull), 0),
     vendidasPropias: ms.reduce((t, m) => t + num(m.vendidasPropias), 0),
+    vendidasFlex: ms.reduce((t, m) => t + num(m.vendidasFlex), 0),
+    ventasDiariasFlex: Object.keys(porDiaFlex).sort().map(f => ({ fecha: f, unidades: porDiaFlex[f] })),
     ventasMensuales: Object.values(porMes),
     ventasDiarias: Object.keys(porDia).sort().map(f => ({ fecha: f, unidades: porDia[f] })),
     _miembros: ms.map(m => m.id)
@@ -1450,7 +1454,9 @@ function consolidarFamilia(nombre, gs) {
   const stockFull = full.reduce((t, g) => t + num(g.virtual.stockFull), 0);
   const porMes = {};
   const porDia = {};
+  const porDiaFlex = {};
   gs.forEach(g => {
+    (g.virtual.ventasDiariasFlex || []).forEach(d => { porDiaFlex[d.fecha] = (porDiaFlex[d.fecha] || 0) + num(d.unidades) * g.factor; });
     (g.virtual.ventasMensuales || []).forEach(v => {
       const k = (v.mes || '') + '|' + (v.anio || '');
       const a = porMes[k] || (porMes[k] = { id: 'vmg:' + k, mes: v.mes, anio: v.anio, unidades: 0, dias: 0 });
@@ -1469,6 +1475,8 @@ function consolidarFamilia(nombre, gs) {
     stockFull,
     vendidasFull: gs.reduce((t, g) => t + num(g.virtual.vendidasFull) * g.factor, 0),
     vendidasPropias: gs.reduce((t, g) => t + num(g.virtual.vendidasPropias) * g.factor, 0),
+    vendidasFlex: gs.reduce((t, g) => t + num(g.virtual.vendidasFlex) * g.factor, 0),
+    ventasDiariasFlex: Object.keys(porDiaFlex).sort().map(f => ({ fecha: f, unidades: porDiaFlex[f] })),
     ventasMensuales: Object.values(porMes),
     ventasDiarias: Object.keys(porDia).sort().map(f => ({ fecha: f, unidades: porDia[f] })),
     _miembros: gs.reduce((t, g) => t.concat(g.miembros.map(m => m.id)), [])
@@ -3770,6 +3778,10 @@ function stockProductoVacio(nombre) {
     stockFisicoBase: '',
     fechaConteoBase: hoy,
     demandaComprometida: '',
+    flexConteo: '',
+    flexFechaConteo: '',
+    flexDiasCobertura: 15,
+    movimientosFlex: [],
     ventasMensuales: [],
     ventasSemanales: [],
     envios: []
@@ -3944,20 +3956,49 @@ function calcularModeloStock(p) {
       ordenesEnTransito += cant;
     }
   });
-  // Ventas por vía de despacho (las trae la sincronización desde Mercado Libre).
-  // Las que despachaste vos salieron de TU depósito; las de FULL salieron de FULL.
-  const vendidasFull = Number(p.vendidasFull) || 0;
-  const vendidasPropias = Number(p.vendidasPropias) || 0;
-  // Depósito = lo recibido, menos lo que mandaste a FULL, menos lo que despachaste vos.
-  const depositoSugerido = Math.max(0, recibidasTotal - despachadoAFullTotal - vendidasPropias);
-  // Control de coherencia: no podés vender por FULL más de lo que mandaste a FULL.
-  const faltaDespachoFull = Math.max(0, vendidasFull - despachadoAFullTotal);
   // En FULL: lo informa Mercado Libre en cada sincronización. No se cuenta a mano.
   const stockFull = Number(p.stockFull) || 0;
   // En tu depósito: lo contás vos (campo "unidades contadas a mano"), más lo que
   // haya llegado después de esa fecha y todavía no hayas despachado a FULL.
-  const enDepositoPropio = (Number(p.stockFisicoBase) || 0) + llegadasDespuesDelConteo;
-  const stockFisicoActual = stockFull + enDepositoPropio + enCaminoAFull;
+  // ---- Flex: stock que está en el depósito del courier ----
+  // Se arma con el conteo que te informa el courier (flexConteo a flexFechaConteo) más lo que cargaste a mano
+  // (envíos +, devoluciones −) y menos las ventas Flex posteriores. Lo que mandás a Flex sale de TU depósito.
+  const movs = (p.movimientosFlex || []).filter(m => m.fecha && Number(m.unidades));
+  const signo = m => (m.tipo === 'devolucion' ? -1 : 1) * (Number(m.unidades) || 0);
+  const flexDesdeMov = movs.map(m => m.fecha).sort()[0] || '';
+  const flexCorte = p.flexFechaConteo || '';
+  const flexBase = Number(p.flexConteo) || 0;
+  const flexActivo = !!(flexCorte || flexDesdeMov);
+  const flexDesde = flexCorte || flexDesdeMov;
+  const ventasFlexDesde = !flexActivo ? 0 : (p.ventasDiariasFlex || []).filter(d => d.fecha > flexCorte).reduce((t, d) => t + (Number(d.unidades) || 0), 0);
+  const movFlexNeto = movs.filter(m => m.fecha > flexCorte).reduce((t, m) => t + signo(m), 0);
+  const flexStock = flexActivo ? Math.max(0, flexBase + movFlexNeto - ventasFlexDesde) : 0;
+  const flexDescuadre = flexActivo && flexBase + movFlexNeto - ventasFlexDesde < 0 ? flexBase + movFlexNeto - ventasFlexDesde : 0;
+  // Lo enviado a Flex después del conteo propio ya no está en tu depósito.
+  const salidasAFlexDesdeConteo = movs.filter(m => !fechaBase || new Date(m.fecha + 'T00:00:00') > fechaBase).reduce((t, m) => t + signo(m), 0);
+  const enDepositoPropio = Math.max(0, (Number(p.stockFisicoBase) || 0) + llegadasDespuesDelConteo - salidasAFlexDesdeConteo);
+  // Ritmo Flex: últimos 30 días desde que arrancó (mín. 7 días para no inflarlo).
+  const hace30 = new Date(hoy.getTime() - 30 * 86400000).toISOString().slice(0, 10);
+  const inicioFlex = flexDesde && flexDesde > hace30 ? flexDesde : hace30;
+  const diasFlexObs = Math.max(7, Math.round((hoy - new Date(inicioFlex + 'T00:00:00')) / 86400000));
+  const vendidasFlexRecientes = (p.ventasDiariasFlex || []).filter(d => d.fecha >= inicioFlex).reduce((t, d) => t + (Number(d.unidades) || 0), 0);
+  const ritmoFlex = flexActivo ? vendidasFlexRecientes / diasFlexObs : 0;
+  const flexDiasCob = Number(p.flexDiasCobertura) || 15;
+  const flexObjetivo = Math.ceil(ritmoFlex * flexDiasCob);
+  const flexAReponer = flexActivo ? Math.max(0, flexObjetivo - flexStock) : 0;
+  const flexAlcanzaDias = ritmoFlex > 0 ? Math.floor(flexStock / ritmoFlex) : null;
+  // Ventas por vía de despacho (las trae la sincronización desde Mercado Libre).
+  // Las que despachaste vos salieron de TU depósito; las de FULL salieron de FULL.
+  const vendidasFull = Number(p.vendidasFull) || 0;
+  // Las ventas por self_service anteriores al arranque de Flex fueron despacho propio desde tu depósito.
+  const vendidasFlexTotal = Number(p.vendidasFlex) || 0;
+  const vendidasFlexReales = flexActivo ? (p.ventasDiariasFlex || []).filter(d => d.fecha >= flexDesde).reduce((t, d) => t + (Number(d.unidades) || 0), 0) : 0;
+  const vendidasPropias = (Number(p.vendidasPropias) || 0) + Math.max(0, vendidasFlexTotal - vendidasFlexReales);
+  // Depósito = lo recibido, menos lo que mandaste a FULL, menos lo que despachaste vos.
+  const depositoSugerido = Math.max(0, recibidasTotal - despachadoAFullTotal - vendidasPropias - movs.reduce((t, m) => t + signo(m), 0));
+  // Control de coherencia: no podés vender por FULL más de lo que mandaste a FULL.
+  const faltaDespachoFull = Math.max(0, vendidasFull - despachadoAFullTotal);
+  const stockFisicoActual = stockFull + enDepositoPropio + flexStock + enCaminoAFull;
   const comprometida = Number(p.demandaComprometida) || 0;
   const totalDisponible = stockFisicoActual + ordenesEnTransito - comprometida;
 
@@ -3965,7 +4006,7 @@ function calcularModeloStock(p) {
   // Lo que recibiste menos lo que vendiste debería igualar la suma de los tres lugares.
   const vendidoTotal = (p.ventasMensuales || []).reduce((s, m) => s + (Number(m.unidades) || 0), 0);
   const deberiaHaber = recibidasTotal - vendidoTotal;
-  const hayContado = stockFull + enDepositoPropio + enCaminoAFull;
+  const hayContado = stockFull + enDepositoPropio + flexStock + enCaminoAFull;
   const descuadre = hayContado - deberiaHaber;
   const cantidadAPedir = Math.max(0, Max - totalDisponible);
   const capitalAInvertir = cantidadAPedir * (Number(p.costoLandedUsd) || 0);
@@ -3984,6 +4025,16 @@ function calcularModeloStock(p) {
     stockFisicoActual,
     stockFull,
     enDepositoPropio,
+    flexActivo,
+    flexStock,
+    flexDescuadre,
+    flexDesde,
+    ritmoFlex,
+    flexObjetivo,
+    flexAReponer,
+    flexAlcanzaDias,
+    flexDiasCob,
+    vendidasFlex: vendidasFlexReales,
     enCaminoAFull,
     fullSupuestas,
     despachadoAFullTotal,
@@ -4196,6 +4247,7 @@ function StockPanel({
   seleccion,
   cotizaciones
 }) {
+  const h = React.createElement;
   // Vista por SKU: 'productos' sigue siendo la lista cruda (una por publicación) y es la que editan los
   // handlers; 'productosV' es la consolidada (una por SKU) que se muestra.
   const grupos = agruparStock(productos, productosCostos);
@@ -4278,6 +4330,8 @@ function StockPanel({
               stockFull: pub.stock_disponible != null ? pub.stock_disponible : viejo.stockFull,
               vendidasFull: v ? (v.unidades_vendidas_full || 0) : viejo.vendidasFull,
               vendidasPropias: v ? (v.unidades_vendidas_propias || 0) : viejo.vendidasPropias,
+              vendidasFlex: v ? (v.unidades_vendidas_flex || 0) : (viejo.vendidasFlex || 0),
+              ventasDiariasFlex: v ? (v.diarias_flex || []).map(d => ({ fecha: d.fecha, unidades: d.unidades })) : (viejo.ventasDiariasFlex || []),
               ventasDiarias: v ? (v.diarias || []).map(d => ({ fecha: d.fecha, unidades: d.unidades })) : (viejo.ventasDiarias || []),
               ventasSemanales: []
             };
@@ -4294,6 +4348,8 @@ function StockPanel({
               stockFull: pub.stock_disponible != null ? pub.stock_disponible : 0,
               vendidasFull: v ? (v.unidades_vendidas_full || 0) : 0,
               vendidasPropias: v ? (v.unidades_vendidas_propias || 0) : 0,
+              vendidasFlex: v ? (v.unidades_vendidas_flex || 0) : 0,
+              ventasDiariasFlex: v ? (v.diarias_flex || []).map(d => ({ fecha: d.fecha, unidades: d.unidades })) : [],
               ventasDiarias: v ? (v.diarias || []).map(d => ({ fecha: d.fecha, unidades: d.unidades })) : [],
               stockFisicoBase: '',
               fechaConteoBase: hoy
@@ -4443,6 +4499,24 @@ function StockPanel({
         ...v,
         [field]: value
       } : v)
+    }));
+  };
+  const addMovFlex = (prodId, tipo) => {
+    setProductos(prev => prev.map(p => p.id !== prodId ? p : {
+      ...p,
+      movimientosFlex: [...(p.movimientosFlex || []), { id: `mf${Date.now()}`, fecha: new Date().toISOString().slice(0, 10), tipo, unidades: '', nota: '' }]
+    }));
+  };
+  const updateMovFlex = (prodId, movId, field, value) => {
+    setProductos(prev => prev.map(p => p.id !== prodId ? p : {
+      ...p,
+      movimientosFlex: (p.movimientosFlex || []).map(m => m.id === movId ? { ...m, [field]: value } : m)
+    }));
+  };
+  const removeMovFlex = (prodId, movId) => {
+    setProductos(prev => prev.map(p => p.id !== prodId ? p : {
+      ...p,
+      movimientosFlex: (p.movimientosFlex || []).filter(m => m.id !== movId)
     }));
   };
   const addVentaSemanal = prodId => {
@@ -4939,6 +5013,10 @@ function StockPanel({
     label: "1. En depósito JOPEX",
     value: `${rSeleccionado.enDepositoPropio} u`,
     highlight: true
+  }), rSeleccionado.flexActivo && /*#__PURE__*/React.createElement(CampoCalculado, {
+    label: "En Flex (depósito del courier)",
+    value: `${rSeleccionado.flexStock} u`,
+    highlight: true
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "2. En camino a FULL",
     value: `${rSeleccionado.enCaminoAFull} u`,
@@ -4950,6 +5028,9 @@ function StockPanel({
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Vendidas por FULL",
     value: `${rSeleccionado.vendidasFull} u`
+  }), rSeleccionado.flexActivo && /*#__PURE__*/React.createElement(CampoCalculado, {
+    label: "Vendidas por Flex",
+    value: `${rSeleccionado.vendidasFlex} u`
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Vendidas por envío propio",
     value: `${rSeleccionado.vendidasPropias} u`
@@ -4957,7 +5038,44 @@ function StockPanel({
     label: "Órdenes en tránsito (calculado)",
     value: `${rSeleccionado.ordenesEnTransito} u`,
     highlight: true
-  }))), /*#__PURE__*/React.createElement("div", {
+  }))), h('div', { className: 'table-section' },
+    h('div', { className: 'table-section-header' },
+      h('h2', null, 'Stock en Flex (depósito del courier)'),
+      h('div', { style: { display: 'flex', gap: 8 } },
+        h('button', { className: 'add-btn', type: 'button', onClick: () => addMovFlex(seleccionado.id, 'envio') }, h(Plus, { size: 16 }), 'Envío a Flex'),
+        h('button', { className: 'add-btn', type: 'button', onClick: () => addMovFlex(seleccionado.id, 'devolucion') }, h(Plus, { size: 16 }), 'Devolución'))),
+    h('div', { className: 'calc-grid', style: { padding: '0 16px' } },
+      h(CampoInput, { label: 'Stock en Flex según el courier (último conteo)', prefix: null, value: seleccionado.flexConteo, onChange: v => setCampo(seleccionado.id, 'flexConteo', v) }),
+      h('label', { className: 'calc-field' },
+        h('span', { className: 'calc-field-label' }, 'Fecha de ese conteo'),
+        h('div', { className: 'calc-field-input' }, h('input', { type: 'date', value: seleccionado.flexFechaConteo || '', onChange: e => setCampo(seleccionado.id, 'flexFechaConteo', e.target.value) }))),
+      h(CampoInput, { label: 'Días de venta a tener en Flex', prefix: null, value: seleccionado.flexDiasCobertura, onChange: v => setCampo(seleccionado.id, 'flexDiasCobertura', v) })),
+    rSeleccionado && rSeleccionado.flexActivo
+      ? h('div', { className: 'deposito-sugerido', style: { margin: '12px 16px 0' } },
+          'En Flex hay ', h('strong', null, rSeleccionado.flexStock + ' u'),
+          ' (conteo + envíos − devoluciones − ventas Flex). ',
+          rSeleccionado.ritmoFlex > 0
+            ? 'Vendés ' + (Math.round(rSeleccionado.ritmoFlex * 10) / 10) + ' u/día por Flex: te alcanza para ' + rSeleccionado.flexAlcanzaDias + ' días. '
+            : 'Todavía no hay ventas por Flex. ',
+          rSeleccionado.flexAReponer > 0
+            ? h('strong', null, 'Reponer ' + rSeleccionado.flexAReponer + ' u para tener ' + rSeleccionado.flexDiasCob + ' días' + (rSeleccionado.flexAReponer > rSeleccionado.enDepositoPropio ? ' (en tu depósito solo hay ' + rSeleccionado.enDepositoPropio + ')' : '') + '.')
+            : 'No hace falta reponer.')
+      : h('div', { className: 'sub-empty', style: { margin: '12px 16px 0' } },
+          'Flex todavía no está activo. Cuando el courier te confirme el primer ingreso, cargá el envío con el botón "Envío a Flex": las unidades salen de tu depósito y las ventas Flex se descuentan solas.'),
+    rSeleccionado && rSeleccionado.flexDescuadre < 0 && h('div', { className: 'data-note aviso-rojo', style: { margin: '8px 16px 0' } },
+      'Las ventas Flex superan lo enviado en ' + Math.abs(rSeleccionado.flexDescuadre) + ' u: falta cargar un envío o el conteo del courier está desactualizado.'),
+    h('div', { className: 'table-scroll' },
+      h('table', null,
+        h('thead', null, h('tr', null, h('th', null, 'Fecha'), h('th', null, 'Tipo'), h('th', null, 'Unidades'), h('th', null, 'Nota'), h('th', null))),
+        h('tbody', null,
+          (seleccionado.movimientosFlex || []).length === 0 && h('tr', { className: 'empty-row' }, h('td', { colSpan: 5 }, 'Sin movimientos — cargá cada envío que mandás al depósito del courier.')),
+          (seleccionado.movimientosFlex || []).map(m => h('tr', { key: m.id },
+            h('td', { className: 'editable-cell' }, h('input', { type: 'date', value: m.fecha, onChange: e => updateMovFlex(seleccionado.id, m.id, 'fecha', e.target.value) })),
+            h('td', { className: 'editable-cell' }, h('select', { value: m.tipo, onChange: e => updateMovFlex(seleccionado.id, m.id, 'tipo', e.target.value) },
+              h('option', { value: 'envio' }, 'Envío a Flex'), h('option', { value: 'devolucion' }, 'Devolución a mi depósito'))),
+            h('td', { className: 'editable-cell' }, h('input', { type: 'number', value: m.unidades, onChange: e => updateMovFlex(seleccionado.id, m.id, 'unidades', e.target.value) })),
+            h('td', { className: 'editable-cell' }, h('input', { type: 'text', value: m.nota || '', onChange: e => updateMovFlex(seleccionado.id, m.id, 'nota', e.target.value) })),
+            h('td', { className: 'row-actions' }, h('button', { type: 'button', className: 'icon-btn', onClick: () => removeMovFlex(seleccionado.id, m.id) }, h(Trash2, { size: 14 }))))))))), /*#__PURE__*/React.createElement("div", {
     className: "table-section"
   }, /*#__PURE__*/React.createElement("div", {
     className: "table-section-header"
