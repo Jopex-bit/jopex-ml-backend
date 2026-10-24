@@ -193,6 +193,7 @@ app.use('/api/competencia', requireApiKey, require('./routes/competencia')(app))
 app.use('/api/diagnostico', requireApiKey, require('./routes/diagnostico')(app));
 app.use('/api/costos', requireApiKey, require('./routes/costos')(app));
 app.use('/api/curva', requireApiKey, require('./routes/curva')(app));
+app.use('/api/atencion', requireApiKey, require('./routes/atencion')(app));
 app.use('/api/ventas', requireApiKey, require('./routes/ventas')(app));
 app.use('/api/estado', requireApiKey, require('./routes/estado')(app));
 // Radar de mercado: investigación de oportunidades de producto.
