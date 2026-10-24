@@ -2038,6 +2038,17 @@ function PromoVenceBadge({
     className: `promo-badge ${clase}`
   }, texto);
 }
+
+// Renglón desplegable de un SKU: con varios SKU a la vista (una familia) solo uno queda abierto.
+function SkuAcordeon({ titulo, sub, abierto, onToggle, children }) {
+  const h = React.createElement;
+  return h('div', { className: 'sku-acordeon' + (abierto ? ' sku-acordeon-abierto' : '') },
+    h('button', { type: 'button', className: 'sku-acordeon-head', onClick: onToggle, 'aria-expanded': abierto },
+      h('span', { className: 'sku-acordeon-flecha' }, abierto ? '▾' : '▸'),
+      h('span', { className: 'sku-acordeon-titulo' }, titulo),
+      h('span', { className: 'sku-acordeon-sub' }, sub)),
+    abierto && children);
+}
 function CostosPanel({
   productos,
   setProductos,
@@ -2112,6 +2123,8 @@ function CostosPanel({
   // Trae de ML lo que antes cargabas a mano: cargo por venta, financiación,
   // costo de envío, promoción vigente y su fecha de fin.
   // NO toca el Valor de Adquisición (ese viene de Investigación) ni tu Margen.
+  // Con varios SKU a la vista (una familia) se abre uno solo a la vez; el resto queda como renglón.
+  const [skuAbierto, setSkuAbierto] = useState({ sel: null, clave: null });
   const [sincronizando, setSincronizando] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
   const [syncError, setSyncError] = useState('');
@@ -2391,7 +2404,11 @@ function CostosPanel({
   syncError && /*#__PURE__*/React.createElement("div", { className: "competencia-error" }, syncError),
   /*#__PURE__*/React.createElement("div", {
     className: "costo-cards-grid"
-  }, gruposVisibles(agruparPorSku(productos), seleccion).map(g => g.miembros.length > 1
+  }, (() => {
+    const visibles = gruposVisibles(agruparPorSku(productos), seleccion);
+    const claveDe = g => g.clave || g.miembros[0].id;
+    const abierta = skuAbierto.sel === seleccion && (skuAbierto.clave === '__ninguno__' || visibles.some(g => claveDe(g) === skuAbierto.clave)) ? skuAbierto.clave : (visibles[0] ? claveDe(visibles[0]) : null);
+    const tarjetaDeSku = g => g.miembros.length > 1
     ? /*#__PURE__*/React.createElement(GrupoSkuCard, {
       key: 'sku-' + g.clave,
       g: g,
@@ -2419,7 +2436,15 @@ function CostosPanel({
       tcBelo: tcBelo,
       cotizaciones: cotizaciones,
       stockProductos: stockProductos
-    }))), /*#__PURE__*/React.createElement("div", {
+    });
+    return visibles.map(g => visibles.length > 1 ? React.createElement(SkuAcordeon, {
+      key: 'acc-' + claveDe(g),
+      titulo: g.sku || g.clave || g.miembros[0].nombre,
+      sub: nombreCorto(g.miembros[0].nombre || ''),
+      abierto: abierta === claveDe(g),
+      onToggle: () => setSkuAbierto({ sel: seleccion, clave: abierta === claveDe(g) ? '__ninguno__' : claveDe(g) })
+    }, abierta === claveDe(g) ? tarjetaDeSku(g) : null) : tarjetaDeSku(g));
+  })()), /*#__PURE__*/React.createElement("div", {
     className: "sub-block"
   }, /*#__PURE__*/React.createElement("h3", null, "Historial de lotes (por producto)"), /*#__PURE__*/React.createElement("div", {
     className: "sub-empty"
@@ -7611,6 +7636,13 @@ function JopexPanel() {
           grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
           gap: 14px;
         }
+        .sku-acordeon { grid-column: 1 / -1; border: 1px solid var(--border, rgba(255,255,255,0.12)); border-radius: 12px; overflow: hidden; }
+        .sku-acordeon-head { display: flex; align-items: center; gap: 10px; width: 100%; background: #0d0d0d; border: 0; color: var(--text-primary, #fff); padding: 12px 16px; cursor: pointer; text-align: left; }
+        .sku-acordeon-head:hover { background: rgba(61, 220, 60, 0.06); }
+        .sku-acordeon-abierto { border-color: rgba(61, 220, 60, 0.5); }
+        .sku-acordeon-titulo { font-weight: 700; }
+        .sku-acordeon-sub { color: var(--text-secondary, #9aa4b2); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .sku-acordeon > :not(.sku-acordeon-head) { margin: 0; }
         .stock-solapas { display: flex; gap: 8px; margin: 4px 0 16px; }
         .stock-solapa { background: transparent; border: 1px solid var(--border, rgba(255,255,255,0.12)); color: var(--text-secondary, #9aa4b2); padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; }
         .stock-solapa-activa { color: var(--text-primary, #fff); border-color: rgba(61, 220, 60, 0.6); background: rgba(61, 220, 60, 0.08); }
@@ -8343,7 +8375,10 @@ function JopexPanel() {
           .module-header p { font-size: 13px; margin-bottom: 16px; }
 
           /* Todo lo que era de varias columnas pasa a una */
-          .costo-cards-grid { grid-template-columns: 1fr; gap: 12px; }
+          .costo-cards-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+          .costo-cards-grid > * { min-width: 0; max-width: 100%; }
+          .costo-card-title { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
+          .rol-opciones { flex-wrap: wrap; }
           .costo-card { padding: 14px 13px; border-radius: 11px; }
           .cotiz-grupo-body { grid-template-columns: 1fr; }
           .cotiz-fields-grid { grid-template-columns: 1fr 1fr; }
