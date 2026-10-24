@@ -4697,7 +4697,7 @@ function StockPanel({
     const h = React.createElement;
     const d = famSel.detalle;
     const publicadoPropio = d.filter(x => !x.esFull).reduce((t, x) => t + x.publicado * x.factor, 0);
-    const deposito = rSeleccionado ? rSeleccionado.enDepositoPropio : 0;
+    const deposito = rSeleccionado ? rSeleccionado.enDepositoPropio + (rSeleccionado.flexStock || 0) : 0;
     const totalEq = d.reduce((t, x) => t + x.equivalentes, 0);
     return h('div', { className: 'table-section' },
       h('div', { className: 'table-section-header' }, h('h2', null, 'SKU de la familia (mismo stock)')),
@@ -4712,7 +4712,7 @@ function StockPanel({
           h('td', null, x.equivalentes))),
           h('tr', { key: 'tot' }, h('td', null, h('b', null, 'Total')), h('td'), h('td'), h('td'), h('td'), h('td', null, h('b', null, totalEq)))))),
       h('div', { className: publicadoPropio > deposito ? 'data-note aviso-rojo' : 'sub-empty', style: { marginTop: 8 } },
-        'Stock que las publicaciones de despacho propio muestran en Mercado Libre: ' + publicadoPropio + ' collares equivalentes · en tu depósito: ' + deposito +
+        'Stock que las publicaciones de despacho propio muestran en Mercado Libre: ' + publicadoPropio + ' collares equivalentes · en tu depósito' + (rSeleccionado && rSeleccionado.flexActivo ? ' + Flex' : '') + ': ' + deposito +
         (publicadoPropio > deposito ? ' → las publicaciones muestran más de lo que hay: riesgo de sobreventa.' : ' → alcanza.')));
   })(),
   /*#__PURE__*/React.createElement("div", {
@@ -5184,7 +5184,7 @@ function StockPanel({
     /*#__PURE__*/React.createElement("div", { className: "deriv-paso" },
       /*#__PURE__*/React.createElement("span", { className: "deriv-titulo" }, "5. Cuánto pedir"),
       /*#__PURE__*/React.createElement("div", { className: "deriv-resultado" },
-        `Disponible = ${rSeleccionado.stockFull} en FULL + ${rSeleccionado.enDepositoPropio} en depósito + ${rSeleccionado.enCaminoAFull} en camino a FULL + ${rSeleccionado.ordenesEnTransito} importando − ${Number(seleccionado.demandaComprometida) || 0} comprometido = ${rSeleccionado.totalDisponible} u`),
+        `Disponible = ${rSeleccionado.stockFull} en FULL + ${rSeleccionado.enDepositoPropio} en depósito + ${rSeleccionado.flexActivo ? rSeleccionado.flexStock + ' en Flex + ' : ''}${rSeleccionado.enCaminoAFull} en camino a FULL + ${rSeleccionado.ordenesEnTransito} importando − ${Number(seleccionado.demandaComprometida) || 0} comprometido = ${rSeleccionado.totalDisponible} u`),
       /*#__PURE__*/React.createElement("div", { className: "deriv-resultado" },
         `A pedir = Máximo − Disponible = ${rSeleccionado.Max} − ${rSeleccionado.totalDisponible} = ${rSeleccionado.cantidadAPedir} u`))))));
 }
