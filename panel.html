@@ -378,6 +378,8 @@ const Megaphone = props => /*#__PURE__*/React.createElement(Icon, props, /*#__PU
 }), /*#__PURE__*/React.createElement("path", {
   d: "M11.6 16.8a3 3 0 1 1-5.8-1.6"
 }));
+const Sun = props => /*#__PURE__*/React.createElement(Icon, props, /*#__PURE__*/React.createElement("circle", { cx: "12", cy: "12", r: "4" }),
+  /*#__PURE__*/React.createElement("path", { d: "M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" }));
 const TrendingUp = props => /*#__PURE__*/React.createElement(Icon, props, /*#__PURE__*/React.createElement("polyline", {
   points: "23 6 13.5 15.5 8.5 10.5 1 18"
 }), /*#__PURE__*/React.createElement("polyline", {
@@ -473,6 +475,10 @@ const AlertTriangle = props => /*#__PURE__*/React.createElement(Icon, props, /*#
 }));
 const LOGO_SRC = "data:image/png;base64,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";
 const MODULES = [{
+  id: 'hoy',
+  label: 'Hoy',
+  icon: Sun
+}, {
   id: 'calculadora',
   label: 'Calculadora de Costo Rápido',
   icon: Calculator
@@ -2098,6 +2104,142 @@ function SkuAcordeon({ titulo, sub, abierto, onToggle, children }) {
       h('span', { className: 'sku-acordeon-sub' }, sub)),
     abierto && children);
 }
+// Hora de la última sincronización de cada fuente (la pantalla Hoy avisa cuando están viejas).
+function registrarSync(fuente) {
+  try {
+    const g = JSON.parse(window.localStorage.getItem('jopex_ultima_sync') || '{}');
+    g[fuente] = new Date().toISOString();
+    window.localStorage.setItem('jopex_ultima_sync', JSON.stringify(g));
+  } catch (e) {}
+}
+// Trae las publicaciones de Mercado Libre y las funde con las tarjetas de Costos. No toca el costo ni el margen.
+// La usan el botón de Costos y "Actualizar todo" de la pantalla Hoy.
+async function traerCostosML(cfg, productos) {
+      const base = cfg.url.replace(/\/+$/, '');
+      const resp = await fetch(base + '/api/costos?limit=100', { headers: cfg.key ? { 'x-api-key': cfg.key } : {} });
+      const txt = await resp.text();
+      let json; try { json = JSON.parse(txt); } catch (e) { json = { error: txt }; }
+      if (!resp.ok) throw new Error(json.error || ('HTTP ' + resp.status));
+
+      let copia, info;
+      const norm = s => (s || '').trim().toLowerCase();
+      let nuevos = 0, actualizados = 0;
+      const desajustes = [];
+
+      {
+        copia = productos.slice();
+        // Una tarjeta por publicación. Las 3 publicaciones de un SKU comparten título, así que el
+        // nombre solo sirve para reconocer tarjetas cargadas a mano que todavía no tienen ID de ML
+        // (y cada una se usa una sola vez); si no, las publicaciones se pisarían entre sí.
+        const reclamadas = new Set();
+        json.productos.forEach(ml => {
+          // 1º intentamos por ID de publicación, 2º por nombre (solo tarjetas sin ID)
+          let idx = copia.findIndex(p => p.mlItemId && p.mlItemId === ml.ml_item_id);
+          if (idx < 0) idx = copia.findIndex((p, i) => !p.mlItemId && !reclamadas.has(i) && norm(p.nombre) === norm(ml.titulo));
+
+          const desdeML = {
+            mlItemId: ml.ml_item_id,
+            precioML: ml.precio,
+            envioML: ml.envio_ml != null ? ml.envio_ml : '',
+            cargoVenta: ml.cargo_venta_pct != null ? ml.cargo_venta_pct : '',
+            financiamiento: ml.financiacion_pct != null ? ml.financiacion_pct : '',
+            promoPct: ml.promocion?.descuento_pct != null ? ml.promocion.descuento_pct : '',
+            promoFechaFin: ml.promocion?.hasta || '',
+            cargoFijoML: ml.cargo_fijo != null ? ml.cargo_fijo : null,
+            // Solo pisamos el SKU si ML ya tiene uno cargado — si todavía está
+            // vacío en ML, no queremos borrar lo que el usuario esté por guardar.
+            ...(ml.sku ? { sku: ml.sku } : {}),
+            ...(ml.foto ? { foto: ml.foto } : {}),
+            // Ofertas de campaña (relámpago, etc.): la vigente con menor precio y las próximas.
+            // Se reemplazan en cada sincronización; sin oferta quedan vacías.
+            logistica: ml.logistic_type || null,
+            promoAhora: ml.promos_ahora && ml.promos_ahora[0] ? ml.promos_ahora[0] : null,
+            promosProgramadas: ml.promos_programadas || []
+          };
+          // Control: comparamos el cargo fijo que informa ML contra nuestra tabla.
+          if (ml.cargo_fijo != null && ml.precio > 0) {
+            const esperado = cargoFijoDe(ml.precio);
+            if (Math.abs(ml.cargo_fijo - esperado) > 1) {
+              desajustes.push({
+                titulo: ml.titulo, precio: ml.precio,
+                ml: ml.cargo_fijo, tabla: esperado
+              });
+            }
+          }
+
+          if (idx >= 0) reclamadas.add(idx);
+          if (idx >= 0) {
+            // Preservamos SIEMPRE lo que es tuyo: costo del proveedor y margen objetivo
+            copia[idx] = { ...copia[idx], nombre: copia[idx].nombre || ml.titulo, ...desdeML };
+            actualizados++;
+          } else {
+            // El ID de la tarjeta nunca se repite: una tarjeta vieja pudo quedar con el ID de otra
+            // publicación (cuando las de un mismo SKU se pisaban por título).
+            let nuevoId = 'ml' + ml.ml_item_id;
+            while (copia.some(c => c.id === nuevoId)) nuevoId += '_';
+            copia.push({
+              id: nuevoId,
+              nombre: ml.titulo,
+              valorAdquisicion: '',
+              mgUtilidad: '',
+              ...desdeML
+            });
+            nuevos++;
+          }
+        });
+        // Las publicaciones nuevas de un SKU que ya tiene costo cargado heredan lo compartido
+        // (costo, componentes y margen deseado) de su hermana; solo se completan campos vacíos.
+        const vacio = v => v === '' || v == null || (Array.isArray(v) && !v.length);
+        const COMPARTIDOS = ['valorAdquisicion', 'componentes', 'mgUtilidad', 'familia'];
+        const donantes = {};
+        copia.forEach(p => {
+          const k = skuClave(p);
+          if (k && !donantes[k] && COMPARTIDOS.some(c => !vacio(p[c]))) donantes[k] = p;
+        });
+        copia.forEach((p, i) => {
+          const k = skuClave(p); const d = k && donantes[k];
+          if (!d || d === p) return;
+          const faltan = COMPARTIDOS.filter(c => vacio(p[c]) && !vacio(d[c]));
+          if (faltan.length) {
+            const rell = { ...p };
+            faltan.forEach(c => { rell[c] = c === 'componentes' ? d[c].map((k2, j) => ({ ...k2, id: 'k' + Date.now() + i + j })) : d[c]; });
+            copia[i] = rell;
+          }
+        });
+        // Repara IDs repetidos (los dejó una sincronización anterior): la segunda tarjeta con un ID
+        // repetido se renombra, para que editar una no toque a la otra.
+        const vistos = new Set();
+        copia.forEach((c, i) => {
+          let id = c.id;
+          if (vistos.has(id)) { while (vistos.has(id) || copia.some(x => x !== c && x.id === id)) id += '_'; copia[i] = { ...c, id }; }
+          vistos.add(id);
+        });
+      }
+
+      info = {
+        generado_en: json.generado_en,
+        campanas: json.campanas || [],
+        conPromo: json.productos.filter(p => p.promocion).map(p => ({
+          titulo: p.titulo, pct: p.promocion.descuento_pct,
+          precio: p.promocion.precio_promo, hasta: p.promocion.hasta
+        })),
+        disponibles: json.productos.filter(p => p.promo_disponible && !p.promocion).map(p => ({
+          titulo: p.titulo, pct: p.promo_disponible.descuento_sugerido_pct,
+          precio: p.promo_disponible.precio_sugerido
+        })),
+        avisos: json.productos.filter(p => p.avisos && p.avisos.length)
+          .map(p => ({ titulo: p.titulo, avisos: p.avisos }))
+      };
+      let extra = '';
+      if (desajustes.length) {
+        extra = ' ATENCIÓN: en ' + desajustes.length + ' producto(s) el cargo fijo que informa ML no coincide con la tabla del panel (' +
+          desajustes.map(d => d.titulo.slice(0, 22) + ': ML ' + d.ml + ' vs tabla ' + d.tabla).join('; ') +
+          '). Puede que ML haya actualizado los valores.';
+      }
+      registrarSync('costos');
+      return { copia, info, extra, nuevos, actualizados };
+}
+
 function CostosPanel({
   productos,
   setProductos,
@@ -2248,128 +2390,10 @@ function CostosPanel({
     if (!cfg.url) { setSyncError('Falta configurar la URL del backend (está en el módulo Investigación).'); return; }
     setSincronizando(true); setSyncError(''); setSyncMsg('');
     try {
-      const base = cfg.url.replace(/\/+$/, '');
-      const resp = await fetch(base + '/api/costos?limit=100', { headers: cfg.key ? { 'x-api-key': cfg.key } : {} });
-      const txt = await resp.text();
-      let json; try { json = JSON.parse(txt); } catch (e) { json = { error: txt }; }
-      if (!resp.ok) throw new Error(json.error || ('HTTP ' + resp.status));
-
-      const norm = s => (s || '').trim().toLowerCase();
-      let nuevos = 0, actualizados = 0;
-      const desajustes = [];
-
-      {
-        const copia = productos.slice();
-        // Una tarjeta por publicación. Las 3 publicaciones de un SKU comparten título, así que el
-        // nombre solo sirve para reconocer tarjetas cargadas a mano que todavía no tienen ID de ML
-        // (y cada una se usa una sola vez); si no, las publicaciones se pisarían entre sí.
-        const reclamadas = new Set();
-        json.productos.forEach(ml => {
-          // 1º intentamos por ID de publicación, 2º por nombre (solo tarjetas sin ID)
-          let idx = copia.findIndex(p => p.mlItemId && p.mlItemId === ml.ml_item_id);
-          if (idx < 0) idx = copia.findIndex((p, i) => !p.mlItemId && !reclamadas.has(i) && norm(p.nombre) === norm(ml.titulo));
-
-          const desdeML = {
-            mlItemId: ml.ml_item_id,
-            precioML: ml.precio,
-            envioML: ml.envio_ml != null ? ml.envio_ml : '',
-            cargoVenta: ml.cargo_venta_pct != null ? ml.cargo_venta_pct : '',
-            financiamiento: ml.financiacion_pct != null ? ml.financiacion_pct : '',
-            promoPct: ml.promocion?.descuento_pct != null ? ml.promocion.descuento_pct : '',
-            promoFechaFin: ml.promocion?.hasta || '',
-            cargoFijoML: ml.cargo_fijo != null ? ml.cargo_fijo : null,
-            // Solo pisamos el SKU si ML ya tiene uno cargado — si todavía está
-            // vacío en ML, no queremos borrar lo que el usuario esté por guardar.
-            ...(ml.sku ? { sku: ml.sku } : {}),
-            ...(ml.foto ? { foto: ml.foto } : {}),
-            // Ofertas de campaña (relámpago, etc.): la vigente con menor precio y las próximas.
-            // Se reemplazan en cada sincronización; sin oferta quedan vacías.
-            logistica: ml.logistic_type || null,
-            promoAhora: ml.promos_ahora && ml.promos_ahora[0] ? ml.promos_ahora[0] : null,
-            promosProgramadas: ml.promos_programadas || []
-          };
-          // Control: comparamos el cargo fijo que informa ML contra nuestra tabla.
-          if (ml.cargo_fijo != null && ml.precio > 0) {
-            const esperado = cargoFijoDe(ml.precio);
-            if (Math.abs(ml.cargo_fijo - esperado) > 1) {
-              desajustes.push({
-                titulo: ml.titulo, precio: ml.precio,
-                ml: ml.cargo_fijo, tabla: esperado
-              });
-            }
-          }
-
-          if (idx >= 0) reclamadas.add(idx);
-          if (idx >= 0) {
-            // Preservamos SIEMPRE lo que es tuyo: costo del proveedor y margen objetivo
-            copia[idx] = { ...copia[idx], nombre: copia[idx].nombre || ml.titulo, ...desdeML };
-            actualizados++;
-          } else {
-            // El ID de la tarjeta nunca se repite: una tarjeta vieja pudo quedar con el ID de otra
-            // publicación (cuando las de un mismo SKU se pisaban por título).
-            let nuevoId = 'ml' + ml.ml_item_id;
-            while (copia.some(c => c.id === nuevoId)) nuevoId += '_';
-            copia.push({
-              id: nuevoId,
-              nombre: ml.titulo,
-              valorAdquisicion: '',
-              mgUtilidad: '',
-              ...desdeML
-            });
-            nuevos++;
-          }
-        });
-        // Las publicaciones nuevas de un SKU que ya tiene costo cargado heredan lo compartido
-        // (costo, componentes y margen deseado) de su hermana; solo se completan campos vacíos.
-        const vacio = v => v === '' || v == null || (Array.isArray(v) && !v.length);
-        const COMPARTIDOS = ['valorAdquisicion', 'componentes', 'mgUtilidad', 'familia'];
-        const donantes = {};
-        copia.forEach(p => {
-          const k = skuClave(p);
-          if (k && !donantes[k] && COMPARTIDOS.some(c => !vacio(p[c]))) donantes[k] = p;
-        });
-        copia.forEach((p, i) => {
-          const k = skuClave(p); const d = k && donantes[k];
-          if (!d || d === p) return;
-          const faltan = COMPARTIDOS.filter(c => vacio(p[c]) && !vacio(d[c]));
-          if (faltan.length) {
-            const rell = { ...p };
-            faltan.forEach(c => { rell[c] = c === 'componentes' ? d[c].map((k2, j) => ({ ...k2, id: 'k' + Date.now() + i + j })) : d[c]; });
-            copia[i] = rell;
-          }
-        });
-        // Repara IDs repetidos (los dejó una sincronización anterior): la segunda tarjeta con un ID
-        // repetido se renombra, para que editar una no toque a la otra.
-        const vistos = new Set();
-        copia.forEach((c, i) => {
-          let id = c.id;
-          if (vistos.has(id)) { while (vistos.has(id) || copia.some(x => x !== c && x.id === id)) id += '_'; copia[i] = { ...c, id }; }
-          vistos.add(id);
-        });
-        setProductos(copia);
-      }
-
-      setSyncInfo({
-        generado_en: json.generado_en,
-        campanas: json.campanas || [],
-        conPromo: json.productos.filter(p => p.promocion).map(p => ({
-          titulo: p.titulo, pct: p.promocion.descuento_pct,
-          precio: p.promocion.precio_promo, hasta: p.promocion.hasta
-        })),
-        disponibles: json.productos.filter(p => p.promo_disponible && !p.promocion).map(p => ({
-          titulo: p.titulo, pct: p.promo_disponible.descuento_sugerido_pct,
-          precio: p.promo_disponible.precio_sugerido
-        })),
-        avisos: json.productos.filter(p => p.avisos && p.avisos.length)
-          .map(p => ({ titulo: p.titulo, avisos: p.avisos }))
-      });
-      let extra = '';
-      if (desajustes.length) {
-        extra = ' ATENCIÓN: en ' + desajustes.length + ' producto(s) el cargo fijo que informa ML no coincide con la tabla del panel (' +
-          desajustes.map(d => d.titulo.slice(0, 22) + ': ML ' + d.ml + ' vs tabla ' + d.tabla).join('; ') +
-          '). Puede que ML haya actualizado los valores.';
-      }
-      setSyncMsg(`${actualizados} producto(s) actualizado(s) y ${nuevos} nuevo(s) desde Mercado Libre. Tu costo y tu margen no se tocaron.` + extra);
+      const r = await traerCostosML(cfg, productos);
+      setProductos(r.copia);
+      setSyncInfo(r.info);
+      setSyncMsg(`${r.actualizados} producto(s) actualizado(s) y ${r.nuevos} nuevo(s) desde Mercado Libre. Tu costo y tu margen no se tocaron.` + r.extra);
     } catch (e) {
       setSyncError('No se pudo sincronizar: ' + e.message +
         (String(e.message).includes('Failed to fetch') ? ' — si el servidor estaba dormido, esperá ~50 s y reintentá.' : ''));
@@ -4418,47 +4442,9 @@ function TransitoStock({ p, r, updateEnvio, updateMovFlex, famSel }) {
       h('div', { className: 'sub-empty', style: { margin: '0 16px 12px' } },
         'Pendiente: primero hay que comprobar que Mercado Libre deja leer las devoluciones de tu cuenta. Mientras tanto, lo que vuelve a FULL se ve solo en el stock FULL cuando Mercado Libre lo habilita.')));
 }
-function StockPanel({
-  productosCostos,
-  productos,
-  setProductos,
-  seleccion,
-  cotizaciones
-}) {
-  const h = React.createElement;
-  // Vista por SKU: 'productos' sigue siendo la lista cruda (una por publicación) y es la que editan los
-  // handlers; 'productosV' es la consolidada (una por SKU) que se muestra.
-  const grupos = agruparStock(productos, productosCostos);
-  const productosV = grupos.map(g => g.virtual);
-  const familias = agruparFamiliasStock(grupos);
-  const [solapa, setSolapa] = useState('disponible');
-  const [envioAbierto, setEnvioAbierto] = useState(null);
-  const [selInterno, setSelInterno] = useState(STOCK_PRODUCTOS_INICIAL[0]?.id || null);
-  // La selección del menú lateral manda; si no hay, vale la interna.
-  // Al elegir en el menú, el detalle se abre solo (no hay que hacer un segundo clic).
-  const selectedId = seleccion || selInterno;
-  const setSelectedId = setSelInterno;
-  // Un SKU que pertenece a una familia se ve siempre como su familia (stock y demanda en común).
-  const gSelRaw = grupos.find(g => g.id === selectedId) || null;
-  const selId = String(selectedId || '').startsWith('fam:') ? selectedId : (gSelRaw && gSelRaw.familia ? 'fam:' + gSelRaw.familia : selectedId);
-  const famSel = String(selId || '').startsWith('fam:') ? (familias.find(f => f.key === selId) || null) : null;
-  React.useEffect(() => {
-    if (seleccion) setSelInterno(seleccion);
-  }, [seleccion]);
-
-  // ---------- NUEVO: sincronizar Stock con Mercado Libre ----------
-  // Trae las publicaciones activas, sus ventas reales mes a mes y el stock
-  // disponible que informa ML. NO toca lo que es criterio tuyo: días de
-  // cobertura, tiempos de lead time, envíos ni costo landed.
-  const [sincStock, setSincStock] = useState(false);
-  const [msgStock, setMsgStock] = useState('');
-  const [errStock, setErrStock] = useState('');
-
-  const sincronizarStock = async () => {
-    const cfg = leerCfgBackend();
-    if (!cfg.url) { setErrStock('Configurá la URL del backend en el módulo Investigación.'); return; }
-    setSincStock(true); setErrStock(''); setMsgStock('');
-    try {
+// Trae stock en FULL y ventas reales desde Mercado Libre y las funde con los productos de Stock.
+// La usan el botón de Stock y "Actualizar todo" de la pantalla Hoy.
+async function traerStockML(cfg, productos) {
       const base = cfg.url.replace(/\/+$/, '');
       const cab = { headers: cfg.key ? { 'x-api-key': cfg.key } : {} };
       const pedir = async (ruta) => {
@@ -4476,9 +4462,10 @@ function StockPanel({
       (ventas.items || []).forEach(v => { porItem[v.ml_item_id] = v; });
       const hoy = new Date().toISOString().slice(0, 10);
       let nuevos = 0, actualizados = 0;
+      let copia;
 
       {
-        const copia = productos.slice();
+        copia = productos.slice();
         (pubs.items || []).forEach(pub => {
           const v = porItem[pub.id];
           // Meses reales. Regla: si un mes no tuvo ventas dejamos "días" en 0 para
@@ -4536,8 +4523,55 @@ function StockPanel({
             nuevos++;
           }
         });
-        setProductos(copia);
       }
+      registrarSync('stock');
+      return { copia, nuevos, actualizados, ventas };
+}
+
+function StockPanel({
+  productosCostos,
+  productos,
+  setProductos,
+  seleccion,
+  cotizaciones
+}) {
+  const h = React.createElement;
+  // Vista por SKU: 'productos' sigue siendo la lista cruda (una por publicación) y es la que editan los
+  // handlers; 'productosV' es la consolidada (una por SKU) que se muestra.
+  const grupos = agruparStock(productos, productosCostos);
+  const productosV = grupos.map(g => g.virtual);
+  const familias = agruparFamiliasStock(grupos);
+  const [solapa, setSolapa] = useState('disponible');
+  const [envioAbierto, setEnvioAbierto] = useState(null);
+  const [selInterno, setSelInterno] = useState(STOCK_PRODUCTOS_INICIAL[0]?.id || null);
+  // La selección del menú lateral manda; si no hay, vale la interna.
+  // Al elegir en el menú, el detalle se abre solo (no hay que hacer un segundo clic).
+  const selectedId = seleccion || selInterno;
+  const setSelectedId = setSelInterno;
+  // Un SKU que pertenece a una familia se ve siempre como su familia (stock y demanda en común).
+  const gSelRaw = grupos.find(g => g.id === selectedId) || null;
+  const selId = String(selectedId || '').startsWith('fam:') ? selectedId : (gSelRaw && gSelRaw.familia ? 'fam:' + gSelRaw.familia : selectedId);
+  const famSel = String(selId || '').startsWith('fam:') ? (familias.find(f => f.key === selId) || null) : null;
+  React.useEffect(() => {
+    if (seleccion) setSelInterno(seleccion);
+  }, [seleccion]);
+
+  // ---------- NUEVO: sincronizar Stock con Mercado Libre ----------
+  // Trae las publicaciones activas, sus ventas reales mes a mes y el stock
+  // disponible que informa ML. NO toca lo que es criterio tuyo: días de
+  // cobertura, tiempos de lead time, envíos ni costo landed.
+  const [sincStock, setSincStock] = useState(false);
+  const [msgStock, setMsgStock] = useState('');
+  const [errStock, setErrStock] = useState('');
+
+  const sincronizarStock = async () => {
+    const cfg = leerCfgBackend();
+    if (!cfg.url) { setErrStock('Configurá la URL del backend en el módulo Investigación.'); return; }
+    setSincStock(true); setErrStock(''); setMsgStock('');
+    try {
+      const r = await traerStockML(cfg, productos);
+      setProductos(r.copia);
+      const ventas = r.ventas, actualizados = r.actualizados, nuevos = r.nuevos;
       setMsgStock(actualizados + ' producto(s) actualizado(s) y ' + nuevos + ' nuevo(s). ' +
         'Ventas reales de ' + (ventas.ordenes_pagadas || 0) + ' órdenes pagadas (' +
         ventas.desde + ' a ' + ventas.hasta + '). ' +
@@ -6549,6 +6583,171 @@ function CalculadoraRapidaPanel() {
       h('div', { className: 'calc-col-manual' }, tarjetaManual))));
 }
 
+
+// ---------- Hoy: pantalla de arranque (qué pedir, precios y margen, ventas, Ads) ----------
+function HoyPanel({ productos, productosCosto, setProductos, stockProductos, setStockProductos, adsCfg, setAdsCfg, irA }) {
+  const h = React.createElement;
+  const [actualizando, setActualizando] = useState(false);
+  const [estadoAct, setEstadoAct] = useState([]);
+  const [, refrescar] = useState(0);
+  const ahora = Date.now();
+  const tc = tcBeloGuardado();
+  const fmtFecha = iso => { const d = iso ? new Date(iso) : null; return d && !isNaN(d.getTime()) ? fechaHoraCorta(iso) : 'nunca'; };
+  const hoyAR = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+  const sumarDias = (iso, n) => { const d = new Date(iso + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+
+  // ---- Frescura de los datos ----
+  let ult = {};
+  try { ult = JSON.parse(window.localStorage.getItem('jopex_ultima_sync') || '{}'); } catch (e) {}
+  const fuentes = [
+    { k: 'Stock', iso: ult.stock },
+    { k: 'Costos', iso: ult.costos },
+    { k: 'Ads', iso: adsCfg && adsCfg.sync ? adsCfg.sync.fecha : null }
+  ].map(f => ({ ...f, viejo: !f.iso || (ahora - new Date(f.iso).getTime()) > 24 * 3600 * 1000 }));
+
+  // ---- Stock: una fila por familia o SKU suelto ----
+  const gs = agruparStock(stockProductos, productosCosto);
+  const fams = agruparFamiliasStock(gs);
+  const items = [];
+  const vistas = {};
+  gs.forEach(g => {
+    if (!g.familia) { items.push({ nombre: (g.sku || g.virtual.nombre || '(sin nombre)'), v: g.virtual, id: g.id }); return; }
+    if (vistas[g.familia]) return;
+    vistas[g.familia] = true;
+    const f = fams.find(x => x.nombre === g.familia);
+    if (f) items.push({ nombre: g.familia, v: f.virtual, id: f.key });
+  });
+  items.forEach(it => { it.r = calcularModeloStock(it.v); it.nivel = nivelAlerta(it.v, it.r); });
+  const conModelo = items.filter(it => it.r);
+  const sinModelo = items.filter(it => !it.r);
+  const orden = { red: 0, amber: 1, green: 2 };
+  conModelo.sort((a, b) => (orden[a.nivel] - orden[b.nivel]) || (b.r.cantidadAPedir - a.r.cantidadAPedir));
+
+  // ---- En camino: importaciones y reposiciones a Flex ----
+  const hoyD = new Date(); hoyD.setHours(0, 0, 0, 0);
+  const f2d = x => (x ? new Date(x + 'T00:00:00') : null);
+  const enCamino = [];
+  items.forEach(it => {
+    (it.v.envios || []).filter(e => !e.noCuenta && Number(e.cantidad) > 0).forEach(e => {
+      const d = f2d(e.fechaLlegadaDeposito);
+      if (d && d <= hoyD) return;
+      enCamino.push({ key: it.id + e.id, nombre: it.nombre, txt: e.cantidad + ' u · ' + (e.courierIntl || 'sin courier') + (e.fechaLlegadaDeposito ? ' · llega ' + e.fechaLlegadaDeposito : ''), aranceles: e.arancelesPagados === true || e.arancelesPagados === 'si', url: urlSeguimiento(e.courierIntl, e.trackingIntl), id: it.id });
+    });
+    (it.v.movimientosFlex || []).filter(m => m.tipo === 'envio' && m.estado === 'enCamino' && Number(m.unidades) > 0).forEach(m => {
+      enCamino.push({ key: it.id + m.id, nombre: it.nombre, txt: m.unidades + ' u a Flex · ' + (m.courier || 'sin courier'), aranceles: null, url: urlSeguimiento(m.courier, m.tracking), id: it.id });
+    });
+  });
+
+  // ---- Precios y margen (por publicación, con la promo vigente) ----
+  const negativos = [], porVencer = [], arrancanHoy = [];
+  agruparPorSku(productosCosto).forEach(g => g.miembros.forEach(m => {
+    const r = calcularCosto(m);
+    const etiqueta = g.sku || nombreCorto(m);
+    if (r && !r.error && r.promo && r.promo.margenRealPromo < 0) negativos.push({ key: m.id, etiqueta, txt: 'margen con la promo: ' + pct(r.promo.margenRealPromo) + ' (' + money(r.promo.gananciaNetaPromo) + ' por venta)', g });
+    const pv = promoVigente(m);
+    if (pv && pv.hasta) { const falta = new Date(pv.hasta).getTime() - ahora; if (falta > 0 && falta < 48 * 3600 * 1000) porVencer.push({ key: m.id, etiqueta, precio: Number(pv.precio), t: new Date(pv.hasta).getTime(), g }); }
+    promosProximas(m).forEach((x, i) => { if (new Date(x.desde).toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }) === hoyAR) arrancanHoy.push({ key: m.id + i, etiqueta, precio: Number(x.precio), t: new Date(x.desde).getTime(), g }); });
+  }));
+  // Una línea por SKU: cuántas publicaciones, el precio más bajo y el primer horario.
+  const porSku = (lista, verbo) => { const m = {}; lista.forEach(x => { const a = m[x.etiqueta] || (m[x.etiqueta] = { ...x, n: 0 }); a.n++; if (x.precio < a.precio) a.precio = x.precio; if (x.t < a.t) a.t = x.t; }); return Object.values(m).map(x => ({ ...x, txt: x.n + ' oferta(s) ' + verbo + ' ' + fechaHoraCorta(new Date(x.t).toISOString()) + ' · desde ' + money(x.precio) })); };
+  const venceLineas = porSku(porVencer, 'hasta');
+  const empiezaLineas = porSku(arrancanHoy, 'desde');
+
+  // ---- Ventas: ayer, últimos 7 días vs 7 anteriores ----
+  const suma = (arr, desde, hasta) => (arr || []).filter(d => d.fecha >= desde && d.fecha <= hasta).reduce((t, d) => t + (Number(d.unidades) || 0), 0);
+  const ayer = sumarDias(hoyAR, -1);
+  const ventas = items.map(it => {
+    const dd = it.v.ventasDiarias || [];
+    return { nombre: it.nombre, id: it.id, ayer: suma(dd, ayer, ayer), u7: suma(dd, sumarDias(hoyAR, -7), ayer), p7: suma(dd, sumarDias(hoyAR, -14), sumarDias(hoyAR, -8)) };
+  }).filter(x => x.u7 > 0 || x.p7 > 0 || x.ayer > 0).sort((a, b) => b.u7 - a.u7);
+  const tot = ventas.reduce((t, x) => ({ ayer: t.ayer + x.ayer, u7: t.u7 + x.u7, p7: t.p7 + x.p7 }), { ayer: 0, u7: 0, p7: 0 });
+  const delta = (a, b) => (b > 0 ? Math.round((a - b) / b * 100) : null);
+
+  // ---- Ads ----
+  const camps = ((adsCfg && adsCfg.sync && adsCfg.sync.campanas) || []).map(c => ({ c, d: metricasDerivadas(c.metricas) }));
+  const adsVencido = fuentes[2].viejo;
+
+  // ---- Actualizar todo ----
+  const actualizarTodo = async () => {
+    const cfg = leerCfgBackend();
+    if (!cfg.url) { setEstadoAct([{ k: 'Todo', ok: false, msg: 'Falta configurar la URL del backend (módulo Investigación).' }]); return; }
+    setActualizando(true); setEstadoAct([]);
+    const op = Object.assign({ dias: 30, hasta: 'hoy' }, (adsCfg && adsCfg.opciones) || {});
+    const tareas = [
+      ['Costos', async () => { const r = await traerCostosML(cfg, productos); setProductos(r.copia); }],
+      ['Stock', async () => { const r = await traerStockML(cfg, stockProductos); setStockProductos(r.copia); }],
+      ['Ads', async () => {
+        const base = cfg.url.replace(/\/+$/, '');
+        const resp = await fetch(base + '/api/ads?dias=' + op.dias + '&hasta=' + op.hasta, { headers: cfg.key ? { 'x-api-key': cfg.key } : {} });
+        const txt = await resp.text();
+        let json; try { json = JSON.parse(txt); } catch (e) { json = { error: txt.slice(0, 300) }; }
+        if (!resp.ok && !json.habilitado) throw new Error(json.error || json.mensaje || ('HTTP ' + resp.status));
+        setAdsCfg(prev => ({ ...prev, sync: { fecha: new Date().toISOString(), habilitado: json.habilitado !== false, ventana: json.ventana || null, mensaje: json.mensaje || null, campanas: json.campanas || [], diagnostico: json.diagnostico || [] } }));
+      }]
+    ];
+    const res = await Promise.allSettled(tareas.map(t => t[1]()));
+    setEstadoAct(res.map((r, i) => ({ k: tareas[i][0], ok: r.status === 'fulfilled', msg: r.status === 'fulfilled' ? 'listo' : (r.reason && r.reason.message) || 'falló' })));
+    setActualizando(false);
+    refrescar(n => n + 1);
+  };
+
+  const fila = (key, izq, der, onClick, cls) => h('div', { key, className: 'hoy-fila' + (cls ? ' ' + cls : '') + (onClick ? ' hoy-fila-click' : ''), onClick },
+    h('div', { className: 'hoy-fila-izq' }, izq), h('div', { className: 'hoy-fila-der' }, der));
+  const bloque = (titulo, irTxt, onIr, hijos) => h('section', { className: 'hoy-bloque' },
+    h('div', { className: 'hoy-bloque-head' }, h('h2', null, titulo), onIr ? h('button', { type: 'button', className: 'link-btn', onClick: onIr }, irTxt) : null),
+    hijos);
+  const vacio = t => h('div', { className: 'sub-empty' }, t);
+  const fechaLarga = new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'America/Argentina/Buenos_Aires' });
+
+  return h('div', { className: 'module-panel hoy-panel' },
+    h('div', { className: 'module-header' }, h('h1', null, 'Hoy'),
+      h('p', null, fechaLarga + (tc ? ' · dólar Belo $' + tc.toLocaleString('es-AR') : ' · cargá el dólar Belo en Costos'))),
+    h('div', { className: 'hoy-barra' },
+      h('div', { className: 'hoy-chips' }, fuentes.map(f => h('span', { key: f.k, className: 'hoy-chip' + (f.viejo ? ' hoy-chip-viejo' : '') }, f.k + ': ' + fmtFecha(f.iso) + (f.viejo ? ' ⚠' : '')))),
+      h('button', { type: 'button', className: 'add-btn sync-btn', disabled: actualizando, onClick: actualizarTodo }, actualizando ? 'Actualizando…' : 'Actualizar todo')),
+    estadoAct.length > 0 && h('div', { className: 'hoy-estado' }, estadoAct.map(e => h('span', { key: e.k, className: e.ok ? 'hoy-ok' : 'hoy-mal' }, e.k + ': ' + e.msg))),
+
+    bloque('1. Para pedir', 'Ir a Stock', () => irA('stock', ''), h('div', null,
+      conModelo.length === 0 ? vacio('Todavía no hay familias con datos para calcular (faltan ventas o envíos).') : conModelo.map(it => fila(it.id,
+        h('span', null, h('span', { className: 'hoy-punto hoy-punto-' + it.nivel }), it.nombre),
+        h('span', null, 'Disp ', h('b', null, it.r.totalDisponible), ' · Mín/Máx ', h('b', null, it.r.Min + '/' + it.r.Max), it.r.cantidadAPedir > 0 ? h('span', { className: 'hoy-pedir' }, ' · Pedir ' + it.r.cantidadAPedir + (it.r.capitalAInvertir > 0 ? ' (≈US$' + Math.round(it.r.capitalAInvertir).toLocaleString('es-AR') + ')' : '')) : ' · sin necesidad de pedir'),
+        () => irA('stock', it.id))),
+      sinModelo.length > 0 && h('div', { className: 'muted hoy-nota' }, sinModelo.length + ' producto(s) sin datos suficientes para el modelo (' + sinModelo.slice(0, 4).map(x => x.nombre).join(', ') + (sinModelo.length > 4 ? '…' : '') + ').'),
+      h('h3', { className: 'hoy-sub' }, 'En camino'),
+      enCamino.length === 0 ? vacio('No hay importaciones ni reposiciones en camino.') : enCamino.map(x => fila(x.key,
+        h('span', null, x.nombre),
+        h('span', null, x.txt, x.aranceles === false ? h('span', { className: 'hoy-pedir' }, ' · Falta pagar aranceles') : (x.aranceles ? ' · Aranceles pagados' : ''), x.url ? h('a', { href: x.url, target: '_blank', rel: 'noreferrer', className: 'link-btn', onClick: e => e.stopPropagation() }, ' Ver seguimiento') : null),
+        () => irA('stock', x.id)))
+    )),
+
+    bloque('2. Precios y margen', 'Ir a Costos', () => irA('costos', ''), h('div', null,
+      negativos.length === 0 ? vacio('Ninguna publicación tiene margen negativo con la promo vigente.') : negativos.map(x => fila('n' + x.key, h('span', null, h('span', { className: 'hoy-punto hoy-punto-red' }), x.etiqueta), x.txt, () => irA('costos', x.g.id, x.g.clave || x.g.miembros[0].id))),
+      venceLineas.length > 0 && h('h3', { className: 'hoy-sub' }, 'Ofertas que vencen en 48 h'),
+      venceLineas.slice(0, 8).map(x => fila('v' + x.key, x.etiqueta, x.txt, () => irA('costos', x.g.id, x.g.clave || x.g.miembros[0].id))),
+      empiezaLineas.length > 0 && h('h3', { className: 'hoy-sub' }, 'Ofertas que empiezan hoy'),
+      empiezaLineas.slice(0, 8).map(x => fila('a' + x.key, x.etiqueta, x.txt, () => irA('costos', x.g.id, x.g.clave || x.g.miembros[0].id)))
+    )),
+
+    bloque('3. Ventas', 'Ir a Stock', () => irA('stock', ''), h('div', null,
+      ventas.length === 0 ? vacio('Sin ventas registradas en los últimos 14 días (sincronizá Stock).') : [
+        fila('tot', h('b', null, 'Total'), h('span', null, 'Ayer ', h('b', null, tot.ayer), ' · 7 días ', h('b', null, tot.u7), ' vs ' + tot.p7 + ' antes', delta(tot.u7, tot.p7) != null ? h('span', { className: delta(tot.u7, tot.p7) >= 0 ? 'hoy-ok' : 'hoy-mal' }, ' (' + (delta(tot.u7, tot.p7) >= 0 ? '+' : '') + delta(tot.u7, tot.p7) + '%)') : null)),
+        ...ventas.slice(0, 8).map(x => fila('s' + x.id, x.nombre, h('span', null, 'Ayer ' + x.ayer + ' · 7 días ' + x.u7 + ' vs ' + x.p7 + (delta(x.u7, x.p7) != null ? ' (' + (delta(x.u7, x.p7) >= 0 ? '+' : '') + delta(x.u7, x.p7) + '%)' : '')), () => irA('stock', x.id)))],
+      h('div', { className: 'muted hoy-nota' }, 'Unidades vendidas; en las familias, collares equivalentes (pack x2 = 2). Se cuentan días completos hasta ayer.')
+    )),
+
+    bloque('4. Ads', 'Ir a Ads', () => irA('ads', ''), h('div', null,
+      adsVencido && h('div', { className: 'hoy-aviso' }, 'Los datos de Ads son del ' + fmtFecha(adsCfg && adsCfg.sync ? adsCfg.sync.fecha : null) + ': tocá "Actualizar todo" para traer los de hoy.'),
+      camps.length === 0 ? vacio('No hay campañas sincronizadas.') : camps.map(({ c, d }) => {
+        const bajo = d && d.roasReal != null && c.roas_objetivo && d.roasReal < c.roas_objetivo;
+        return fila('c' + c.id, h('span', null, h('span', { className: 'hoy-punto hoy-punto-' + (c.estado === 'active' ? (bajo ? 'red' : 'green') : 'gris') }), c.nombre),
+          d ? h('span', null, 'Inversión ' + money(d.inv) + ' · ventas ' + d.v + ' · ROAS ', h('b', { className: bajo ? 'hoy-mal' : '' }, d.roasReal != null ? d.roasReal.toFixed(2) : '—'), ' (objetivo ' + (c.roas_objetivo != null ? c.roas_objetivo : '—') + ')') : '—',
+          () => irA('ads', String(c.id)));
+      }))),
+
+    bloque('5. Preguntas y reclamos', null, null, h('div', { className: 'sub-empty' },
+      'Todavía no disponible: la API de Mercado Libre no autoriza a esta app a leerlos. Se activa cuando habilites el permiso de comunicaciones posventa en tu aplicación de Mercado Libre.')));
+}
+
 function ModulePanel({
   moduleId,
   productos,
@@ -6560,7 +6759,8 @@ function ModulePanel({
   adsCfg,
   setAdsCfg,
   sel,
-  elegir
+  elegir,
+  irA
 }) {
   // Costos edita los datos crudos; el resto de los módulos lee el costo ya sumado.
   const productosCosto = React.useMemo(() => conHermanos(productos).map(p => productoConCostoEfectivo(p, cotizaciones, stockProductos)), [productos, cotizaciones, stockProductos]);
@@ -6598,6 +6798,11 @@ function ModulePanel({
   });
   if (moduleId === 'tiendanube') return /*#__PURE__*/React.createElement(TiendaNubePanel, {
     productos: productosCosto
+  });
+  if (moduleId === 'hoy') return /*#__PURE__*/React.createElement(HoyPanel, {
+    productos: productos, productosCosto: productosCosto, setProductos: setProductos,
+    stockProductos: stockProductos, setStockProductos: setStockProductos,
+    adsCfg: adsCfg, setAdsCfg: setAdsCfg, irA: irA
   });
   if (moduleId === 'calculadora') return /*#__PURE__*/React.createElement(CalculadoraRapidaPanel, null);
   return /*#__PURE__*/React.createElement(GenericModulePanel, {
@@ -6861,6 +7066,8 @@ function RespaldoBloque() {
 function JopexPanel() {
   const [active, setActive] = useState(() => {
     try {
+      // Al abrir el panel (sesión nueva del navegador) se arranca en Hoy; después se recuerda el módulo.
+      if (!window.sessionStorage.getItem('jopex_sesion_iniciada')) return 'hoy';
       return window.localStorage.getItem('jopex_active_module') || 'costos';
     } catch (e) {
       return 'costos';
@@ -6869,6 +7076,7 @@ function JopexPanel() {
   React.useEffect(() => {
     try {
       window.localStorage.setItem('jopex_active_module', active);
+      window.sessionStorage.setItem('jopex_sesion_iniciada', '1');
     } catch (e) {}
   }, [active]);
   const [productos, setProductos] = useState(() => {
@@ -7716,6 +7924,29 @@ function JopexPanel() {
         .buscador-sku-txt span { font-size: 11px; color: var(--text-secondary, #9aa4b2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .buscador-sku-fila button { background: transparent; border: 1px solid rgba(61, 220, 60, 0.5); color: #3ddc3c; border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; min-height: 0; }
         .buscador-sku-vacio { padding: 12px; font-size: 13px; color: var(--text-secondary, #9aa4b2); }
+        .hoy-barra { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+        .hoy-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+        .hoy-chip { font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.15); color: var(--text-secondary, #9aa4b2); }
+        .hoy-chip-viejo { border-color: rgba(245, 197, 66, 0.6); color: #f5c542; }
+        .hoy-estado { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; margin-bottom: 12px; }
+        .hoy-ok { color: #3ddc3c; } .hoy-mal { color: #ff5c5c; }
+        .hoy-bloque { background: #0d0d0d; border: 1px solid var(--border-soft, rgba(255,255,255,0.1)); border-radius: 14px; padding: 14px 16px; margin-bottom: 16px; }
+        .hoy-bloque-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 8px; }
+        .hoy-bloque-head h2 { font-size: 17px; margin: 0; }
+        .hoy-sub { font-size: 13px; color: var(--text-secondary, #9aa4b2); margin: 14px 0 6px; font-weight: 600; }
+        .hoy-fila { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 9px 4px; border-top: 1px solid rgba(255,255,255,0.06); font-size: 14px; }
+        .hoy-fila:first-of-type { border-top: 0; }
+        .hoy-fila-click { cursor: pointer; }
+        .hoy-fila-click:hover { background: rgba(61, 220, 60, 0.05); }
+        .hoy-fila-izq { font-weight: 600; min-width: 0; }
+        .hoy-fila-der { color: var(--text-secondary, #b7c0cc); text-align: right; font-size: 13px; min-width: 0; }
+        .hoy-fila-der b { color: var(--text-primary, #fff); }
+        .hoy-pedir { color: #f5c542; font-weight: 600; }
+        .hoy-punto { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; background: #666; }
+        .hoy-punto-red { background: #ff5c5c; } .hoy-punto-amber { background: #f5c542; } .hoy-punto-green { background: #3ddc3c; }
+        .hoy-nota { font-size: 12px; margin-top: 8px; }
+        .hoy-aviso { background: rgba(245, 197, 66, 0.1); border: 1px solid rgba(245, 197, 66, 0.4); color: #f5c542; border-radius: 10px; padding: 8px 12px; font-size: 13px; margin-bottom: 8px; }
+        @media (max-width: 700px) { .hoy-fila { flex-direction: column; gap: 3px; } .hoy-fila-der { text-align: left; } }
         .stock-solapas { display: flex; gap: 8px; margin: 4px 0 16px; }
         .stock-solapa { background: transparent; border: 1px solid var(--border, rgba(255,255,255,0.12)); color: var(--text-secondary, #9aa4b2); padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; }
         .stock-solapa-activa { color: var(--text-primary, #fff); border-color: rgba(61, 220, 60, 0.6); background: rgba(61, 220, 60, 0.08); }
@@ -8607,7 +8838,8 @@ function JopexPanel() {
     adsCfg: adsCfg,
     setAdsCfg: setAdsCfg,
     sel: sel,
-    elegir: elegir
+    elegir: elegir,
+    irA: irA
   }))));
 }
 
