@@ -1525,6 +1525,51 @@ function margenConPrecio(precio, p, costo, tasasCuotas) {
   return { fijo, comVar, fin, envio, deposito, margen, margenPct: margen / precio * 100 };
 }
 
+// ---------- Alerta de margen mínimo (por SKU, con el precio de la promo vigente) ----------
+// Mínimo aceptable: el que cargues en el SKU o, si está vacío, la mitad del margen deseado.
+// Rojo si con la promo el margen es negativo; amarillo si queda entre 0 y el mínimo.
+function leerTasasCuotas() {
+  try { const s = window.localStorage.getItem('jopex_tasas_cuotas'); return s ? { ...TASAS_CUOTAS_DEFAULT, ...JSON.parse(s) } : { ...TASAS_CUOTAS_DEFAULT }; }
+  catch (e) { return { ...TASAS_CUOTAS_DEFAULT }; }
+}
+function margenMinimoDe(p) {
+  const v = p && p.mgMinimo;
+  if (v !== '' && v != null && !isNaN(v)) return Number(v);
+  return (Number(p && p.mgUtilidad) || 0) / 2;
+}
+function nivelMargen(margenPct, p) {
+  const minimo = margenMinimoDe(p);
+  if (!(margenPct > 0)) return { nivel: 'red', minimo };
+  if (margenPct < minimo) return { nivel: 'amber', minimo };
+  return null;
+}
+// Alerta de un SKU a partir de sus publicaciones (con el costo ya resuelto en cada una).
+function alertaMargenSku(g, tasasCuotas) {
+  const tasas = tasasCuotas || leerTasasCuotas();
+  const tres = g.miembros.length === 3;
+  const lineas = [];
+  g.miembros.forEach((m, i) => {
+    const pv = promoVigente(m);
+    const costo = Number(m.valorAdquisicion);
+    if (!pv || !(costo > 0)) return;
+    const cond = tres ? CONDICIONES_SKU[i] : null;
+    const pe = { ...m, cuotas: cond ? cond.cuotas : (m.cuotas || '6') };
+    const mp = margenConPrecio(Number(pv.precio), pe, costo, tasas);
+    const nv = nivelMargen(mp.margenPct, m);
+    if (nv) lineas.push({ nivel: nv.nivel, cond: cond ? cond.label : '', precio: Number(pv.precio), margenPct: mp.margenPct, minimo: nv.minimo });
+  });
+  if (!lineas.length) return null;
+  return { nivel: lineas.some(l => l.nivel === 'red') ? 'red' : 'amber', lineas };
+}
+function AvisoMargenMinimo({ lineas }) {
+  const h = React.createElement;
+  if (!lineas || !lineas.length) return null;
+  const rojo = lineas.some(l => l.nivel === 'red');
+  return h('div', { className: 'aviso-margen ' + (rojo ? 'aviso-margen-rojo' : 'aviso-margen-amarillo') },
+    h('b', null, rojo ? 'Margen negativo con la promo vigente' : 'Margen por debajo de tu mínimo con la promo vigente'),
+    lineas.map((l, i) => h('div', { key: i }, (l.cond ? l.cond + ': ' : '') + 'a ' + moneyDual(l.precio) + ' te queda ' + pct(l.margenPct) + ' (mínimo aceptable ' + pct(l.minimo) + ')')));
+}
+
 // ---------- Precio manual (redondeado) por publicación ----------
 // Partiendo de un precio elegido a mano (por ejemplo el sugerido redondeado hacia arriba), muestra
 // cuánto cobra ML, cuánto deposita y cuánto queda de margen real. Usa el costo, el envío, el % de
@@ -1584,7 +1629,7 @@ function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate
   const llena = v => v !== '' && v != null && !(Array.isArray(v) && !v.length);
   const prim = g.miembros.reduce((acc, m) => {
     if (!acc) return { ...m };
-    ['valorAdquisicion', 'componentes', 'envioML', 'cargoVenta', 'mgUtilidad'].forEach(c => { if (!llena(acc[c]) && llena(m[c])) acc[c] = m[c]; });
+    ['valorAdquisicion', 'componentes', 'envioML', 'cargoVenta', 'mgUtilidad', 'mgMinimo'].forEach(c => { if (!llena(acc[c]) && llena(m[c])) acc[c] = m[c]; });
     return acc;
   }, null);
   const ids = g.miembros.map(m => m.mlItemId).filter(Boolean);
@@ -1654,7 +1699,9 @@ function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate
         h('h4', null, 'Cargos de MELI y Mg. Utilidad'),
         h(CampoInput, { label: '% Cargo por venta', prefix: '%', value: prim.cargoVenta, onChange: v => onUpdateGrupo('cargoVenta', v) }),
         difiere('cargoVenta') && h('div', { className: 'data-note', style: { marginBottom: 0 } }, 'El % de cargo difiere entre las publicaciones de este SKU (se pisa con el valor que cargues acá).'),
-        h(CampoInput, { label: '% Mg. de Utilidad deseado', prefix: '%', value: prim.mgUtilidad, onChange: v => onUpdateGrupo('mgUtilidad', v) }))),
+        h(CampoInput, { label: '% Mg. de Utilidad deseado', prefix: '%', value: prim.mgUtilidad, onChange: v => onUpdateGrupo('mgUtilidad', v) }),
+        h(CampoInput, { label: '% Mg. mínimo aceptable (vacío = la mitad del deseado: ' + pct(margenMinimoDe({ mgUtilidad: prim.mgUtilidad })) + ')', prefix: '%', value: prim.mgMinimo == null ? '' : prim.mgMinimo, onChange: v => onUpdateGrupo('mgMinimo', v) }))),
+    h(AvisoMargenMinimo, { lineas: (() => { const lin = []; filas.forEach(f => { if (!f.mpromo) return; const nv = nivelMargen(f.mpromo.margenPct, prim); if (nv) lin.push({ nivel: nv.nivel, cond: f.cond ? f.cond.label : '', precio: Number(f.promo.precio), margenPct: f.mpromo.margenPct, minimo: nv.minimo }); }); return lin; })() }),
     h('div', { className: 'promo-block' },
       h('h4', null, 'Condiciones de venta'),
       !costoOk && h('div', { className: 'sub-empty' }, 'Cargá el costo del producto para ver el precio sugerido y los márgenes. Los precios publicados ya se ven abajo.'),
@@ -1795,6 +1842,13 @@ function ProductoCostoCard({
       : /*#__PURE__*/React.createElement("span", { className: "sku-sin-vincular" },
           "Sin vincular a una publicación real todavía — sincronizá con Mercado Libre primero.")),
   /*#__PURE__*/React.createElement(ComponentesCosto, { p: p, cotizaciones: cotizaciones, ef: ef, onUpdate: onUpdate }),
+  (() => {
+    const pv = promoVigente(p);
+    if (!pv || !r || r.error || !(r.costoProductoARS > 0)) return null;
+    const mp = margenConPrecio(Number(pv.precio), p, r.costoProductoARS, tasasCuotas);
+    const nv = nivelMargen(mp.margenPct, p);
+    return nv ? /*#__PURE__*/React.createElement(AvisoMargenMinimo, { lineas: [{ nivel: nv.nivel, cond: '', precio: Number(pv.precio), margenPct: mp.margenPct, minimo: nv.minimo }] }) : null;
+  })(),
   /*#__PURE__*/React.createElement("div", {
     className: "costo-card-body"
   }, /*#__PURE__*/React.createElement("div", {
@@ -1859,6 +1913,11 @@ function ProductoCostoCard({
     prefix: "%",
     value: p.mgUtilidad,
     onChange: v => onUpdate(p.id, 'mgUtilidad', v)
+  }), /*#__PURE__*/React.createElement(CampoInput, {
+    label: "% Mg. mínimo aceptable (vacío = la mitad del deseado: " + pct(margenMinimoDe({ mgUtilidad: p.mgUtilidad })) + ")",
+    prefix: "%",
+    value: p.mgMinimo == null ? '' : p.mgMinimo,
+    onChange: v => onUpdate(p.id, 'mgMinimo', v)
   })), /*#__PURE__*/React.createElement("div", {
     className: "costo-block costo-block-output"
   }, /*#__PURE__*/React.createElement("h4", null, "Precio a la venta (calculado)"), !r && /*#__PURE__*/React.createElement("div", {
@@ -2190,7 +2249,7 @@ async function traerCostosML(cfg, productos) {
         // Las publicaciones nuevas de un SKU que ya tiene costo cargado heredan lo compartido
         // (costo, componentes y margen deseado) de su hermana; solo se completan campos vacíos.
         const vacio = v => v === '' || v == null || (Array.isArray(v) && !v.length);
-        const COMPARTIDOS = ['valorAdquisicion', 'componentes', 'mgUtilidad', 'familia'];
+        const COMPARTIDOS = ['valorAdquisicion', 'componentes', 'mgUtilidad', 'mgMinimo', 'familia'];
         const donantes = {};
         copia.forEach(p => {
           const k = skuClave(p);
@@ -6640,10 +6699,13 @@ function HoyPanel({ productos, productosCosto, setProductos, stockProductos, set
 
   // ---- Precios y margen (por publicación, con la promo vigente) ----
   const negativos = [], porVencer = [], arrancanHoy = [];
+  const tasasHoy = leerTasasCuotas();
+  agruparPorSku(productosCosto).forEach(g => {
+    const al = alertaMargenSku(g, tasasHoy);
+    if (al) negativos.push({ key: g.clave || g.id, etiqueta: g.sku || nombreCorto(g.miembros[0]), nivel: al.nivel, txt: al.lineas.map(l => (l.cond ? l.cond + ' ' : '') + pct(l.margenPct)).join(' · ') + ' con la promo (mínimo ' + pct(al.lineas[0].minimo) + ')', g });
+  });
   agruparPorSku(productosCosto).forEach(g => g.miembros.forEach(m => {
-    const r = calcularCosto(m);
     const etiqueta = g.sku || nombreCorto(m);
-    if (r && !r.error && r.promo && r.promo.margenRealPromo < 0) negativos.push({ key: m.id, etiqueta, txt: 'margen con la promo: ' + pct(r.promo.margenRealPromo) + ' (' + money(r.promo.gananciaNetaPromo) + ' por venta)', g });
     const pv = promoVigente(m);
     if (pv && pv.hasta) { const falta = new Date(pv.hasta).getTime() - ahora; if (falta > 0 && falta < 48 * 3600 * 1000) porVencer.push({ key: m.id, etiqueta, precio: Number(pv.precio), t: new Date(pv.hasta).getTime(), g }); }
     promosProximas(m).forEach((x, i) => { if (new Date(x.desde).toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }) === hoyAR) arrancanHoy.push({ key: m.id + i, etiqueta, precio: Number(x.precio), t: new Date(x.desde).getTime(), g }); });
@@ -6721,7 +6783,7 @@ function HoyPanel({ productos, productosCosto, setProductos, stockProductos, set
     )),
 
     bloque('2. Precios y margen', 'Ir a Costos', () => irA('costos', ''), h('div', null,
-      negativos.length === 0 ? vacio('Ninguna publicación tiene margen negativo con la promo vigente.') : negativos.map(x => fila('n' + x.key, h('span', null, h('span', { className: 'hoy-punto hoy-punto-red' }), x.etiqueta), x.txt, () => irA('costos', x.g.id, x.g.clave || x.g.miembros[0].id))),
+      negativos.length === 0 ? vacio('Ningún SKU está por debajo de su margen mínimo con la promo vigente.') : negativos.map(x => fila('n' + x.key, h('span', null, h('span', { className: 'hoy-punto hoy-punto-' + x.nivel }), x.etiqueta), x.txt, () => irA('costos', x.g.id, x.g.clave || x.g.miembros[0].id))),
       venceLineas.length > 0 && h('h3', { className: 'hoy-sub' }, 'Ofertas que vencen en 48 h'),
       venceLineas.slice(0, 8).map(x => fila('v' + x.key, x.etiqueta, x.txt, () => irA('costos', x.g.id, x.g.clave || x.g.miembros[0].id))),
       empiezaLineas.length > 0 && h('h3', { className: 'hoy-sub' }, 'Ofertas que empiezan hoy'),
@@ -7190,7 +7252,8 @@ function JopexPanel() {
   // Submenús del menú lateral
   const subCostos = (() => {
     const gruposCosto = agruparPorSku(conHermanos(productos).map(p => productoConCostoEfectivo(p, cotizaciones, stockProductos)));
-    const alertaDe = g => g.miembros.some(p => { const r = calcularCosto(p); return r && !r.error && r.promo && r.promo.margenRealPromo < 0; });
+    const tasasAl = leerTasasCuotas();
+    const alertaDe = g => !!alertaMargenSku(g, tasasAl);
     const items = [];
     const porFamilia = {};
     gruposCosto.forEach(g => {
@@ -7947,6 +8010,10 @@ function JopexPanel() {
         .hoy-nota { font-size: 12px; margin-top: 8px; }
         .hoy-aviso { background: rgba(245, 197, 66, 0.1); border: 1px solid rgba(245, 197, 66, 0.4); color: #f5c542; border-radius: 10px; padding: 8px 12px; font-size: 13px; margin-bottom: 8px; }
         @media (max-width: 700px) { .hoy-fila { flex-direction: column; gap: 3px; } .hoy-fila-der { text-align: left; } }
+        .aviso-margen { border-radius: 10px; padding: 10px 14px; margin: 0 0 14px; font-size: 13px; border: 1px solid; }
+        .aviso-margen b { display: block; margin-bottom: 4px; }
+        .aviso-margen-rojo { background: rgba(255, 92, 92, 0.1); border-color: rgba(255, 92, 92, 0.55); color: #ff8a8a; }
+        .aviso-margen-amarillo { background: rgba(245, 197, 66, 0.1); border-color: rgba(245, 197, 66, 0.55); color: #f5c542; }
         .stock-solapas { display: flex; gap: 8px; margin: 4px 0 16px; }
         .stock-solapa { background: transparent; border: 1px solid var(--border, rgba(255,255,255,0.12)); color: var(--text-secondary, #9aa4b2); padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; }
         .stock-solapa-activa { color: var(--text-primary, #fff); border-color: rgba(61, 220, 60, 0.6); background: rgba(61, 220, 60, 0.08); }
