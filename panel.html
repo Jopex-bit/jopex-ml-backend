@@ -2039,6 +2039,47 @@ function PromoVenceBadge({
   }, texto);
 }
 
+
+// ---------- Buscador global de SKU (arriba de todo, en cualquier módulo) ----------
+function BuscadorSku({ productos, stockProductos, onIr }) {
+  const h = React.createElement;
+  const [q, setQ] = useState('');
+  const [foco, setFoco] = useState(false);
+  const norm = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const consulta = norm(q).trim();
+  let resultados = [];
+  if (consulta) {
+    const grupos = agruparPorSku(productos);
+    const primeroDeFamilia = {};
+    grupos.forEach(g => { const f = familiaDe(g); if (f && !primeroDeFamilia[f]) primeroDeFamilia[f] = g.id; });
+    const gs = agruparStock(stockProductos, productos);
+    resultados = grupos.filter(g => norm([g.sku, familiaDe(g), g.miembros[0].nombre, g.miembros[0].apodo].join(' ')).includes(consulta)).slice(0, 8).map(g => {
+      const fam = familiaDe(g);
+      const sg = g.sku ? gs.find(x => x.clave === g.sku.toUpperCase()) : null;
+      return {
+        key: g.clave || g.id,
+        titulo: g.sku || (g.miembros[0].nombre || '(sin nombre)').slice(0, 60),
+        sub: fam || (g.sku ? (g.miembros[0].nombre || '').slice(0, 50) : ''),
+        costos: { id: fam ? primeroDeFamilia[fam] : g.id, foco: g.clave || g.miembros[0].id },
+        stock: sg ? (sg.familia ? 'fam:' + sg.familia : sg.id) : null
+      };
+    });
+  }
+  const ir = (mod, id, f) => { onIr(mod, id, f); setQ(''); setFoco(false); };
+  return h('div', { className: 'buscador-sku' },
+    h('input', {
+      type: 'search', value: q, placeholder: 'Buscar SKU…', 'aria-label': 'Buscar SKU',
+      onChange: e => { setQ(e.target.value); setFoco(true); }, onFocus: () => setFoco(true),
+      onBlur: () => setTimeout(() => setFoco(false), 200),
+      onKeyDown: e => { if (e.key === 'Enter' && resultados[0]) ir('costos', resultados[0].costos.id, resultados[0].costos.foco); if (e.key === 'Escape') { setQ(''); e.target.blur(); } }
+    }),
+    foco && consulta && h('div', { className: 'buscador-sku-lista' },
+      resultados.length === 0 ? h('div', { className: 'buscador-sku-vacio' }, 'Sin resultados') : resultados.map(r => h('div', { key: r.key, className: 'buscador-sku-fila' },
+        h('div', { className: 'buscador-sku-txt' }, h('b', null, r.titulo), r.sub ? h('span', null, r.sub) : null),
+        h('button', { type: 'button', onMouseDown: e => e.preventDefault(), onClick: () => ir('costos', r.costos.id, r.costos.foco) }, 'Costos'),
+        r.stock ? h('button', { type: 'button', onMouseDown: e => e.preventDefault(), onClick: () => ir('stock', r.stock) }, 'Stock') : null))));
+}
+
 // Renglón desplegable de un SKU: con varios SKU a la vista (una familia) solo uno queda abierto.
 function SkuAcordeon({ titulo, sub, abierto, onToggle, children }) {
   const h = React.createElement;
@@ -2053,6 +2094,7 @@ function CostosPanel({
   productos,
   setProductos,
   seleccion,
+  skuFoco,
   cotizaciones,
   stockProductos
 }) {
@@ -2407,7 +2449,7 @@ function CostosPanel({
   }, (() => {
     const visibles = gruposVisibles(agruparPorSku(productos), seleccion);
     const claveDe = g => g.clave || g.miembros[0].id;
-    const abierta = skuAbierto.sel === seleccion && (skuAbierto.clave === '__ninguno__' || visibles.some(g => claveDe(g) === skuAbierto.clave)) ? skuAbierto.clave : (visibles[0] ? claveDe(visibles[0]) : null);
+    const abierta = skuAbierto.sel === seleccion && (skuAbierto.clave === '__ninguno__' || visibles.some(g => claveDe(g) === skuAbierto.clave)) ? skuAbierto.clave : (skuFoco && visibles.some(g => claveDe(g) === skuFoco) ? skuFoco : (visibles[0] ? claveDe(visibles[0]) : null));
     const tarjetaDeSku = g => g.miembros.length > 1
     ? /*#__PURE__*/React.createElement(GrupoSkuCard, {
       key: 'sku-' + g.clave,
@@ -2440,7 +2482,7 @@ function CostosPanel({
     return visibles.map(g => visibles.length > 1 ? React.createElement(SkuAcordeon, {
       key: 'acc-' + claveDe(g),
       titulo: g.sku || g.clave || g.miembros[0].nombre,
-      sub: nombreCorto(g.miembros[0].nombre || ''),
+      sub: (g.miembros[0].nombre || '').slice(0, 70),
       abierto: abierta === claveDe(g),
       onToggle: () => setSkuAbierto({ sel: seleccion, clave: abierta === claveDe(g) ? '__ninguno__' : claveDe(g) })
     }, abierta === claveDe(g) ? tarjetaDeSku(g) : null) : tarjetaDeSku(g));
@@ -6507,6 +6549,7 @@ function ModulePanel({
     productos: productos,
     setProductos: setProductos,
     seleccion: sel.costos,
+    skuFoco: sel.costosFoco,
     cotizaciones: cotizaciones,
     stockProductos: stockProductos
   });
@@ -6863,7 +6906,9 @@ function JopexPanel() {
   }, [adsCfg]);
   // Item seleccionado dentro de cada módulo ('' = ver todos)
   const [sel, setSel] = useState({ costos: '', investigacion: '', stock: '' });
-  const elegir = (mod, id) => setSel(p => ({ ...p, [mod]: id }));
+  const elegir = (mod, id) => setSel(p => ({ ...p, [mod]: id, ...(mod === 'costos' ? { costosFoco: '' } : {}) }));
+  // Salto desde el buscador global: abre el módulo, elige el ítem del menú y, en Costos, deja abierto ese SKU.
+  const irA = (mod, id, foco) => { setSel(p => ({ ...p, [mod]: id, ...(mod === 'costos' ? { costosFoco: foco || '' } : {}) })); setActive(mod); setAbiertos({ [mod]: true }); };
 
   // ---- Módulos plegables (acordeón) ----
   // Un solo módulo desplegado a la vez: al tocar el título de otro módulo, el que estaba
@@ -7643,6 +7688,15 @@ function JopexPanel() {
         .sku-acordeon-titulo { font-weight: 700; }
         .sku-acordeon-sub { color: var(--text-secondary, #9aa4b2); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .sku-acordeon > :not(.sku-acordeon-head) { margin: 0; }
+        .buscador-sku { position: absolute; right: 20px; top: 50%; transform: translateY(-50%); width: 280px; z-index: 50; }
+        .buscador-sku input { width: 100%; box-sizing: border-box; background: #0d0d0d; border: 1px solid var(--border, rgba(255,255,255,0.15)); color: var(--text-primary, #fff); border-radius: 10px; padding: 9px 12px; }
+        .buscador-sku-lista { position: absolute; top: calc(100% + 6px); right: 0; width: 360px; max-width: 92vw; background: #111; border: 1px solid rgba(61, 220, 60, 0.35); border-radius: 12px; overflow: hidden; box-shadow: 0 12px 30px rgba(0,0,0,0.6); }
+        .buscador-sku-fila { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+        .buscador-sku-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+        .buscador-sku-txt b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .buscador-sku-txt span { font-size: 11px; color: var(--text-secondary, #9aa4b2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .buscador-sku-fila button { background: transparent; border: 1px solid rgba(61, 220, 60, 0.5); color: #3ddc3c; border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; min-height: 0; }
+        .buscador-sku-vacio { padding: 12px; font-size: 13px; color: var(--text-secondary, #9aa4b2); }
         .stock-solapas { display: flex; gap: 8px; margin: 4px 0 16px; }
         .stock-solapa { background: transparent; border: 1px solid var(--border, rgba(255,255,255,0.12)); color: var(--text-secondary, #9aa4b2); padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; }
         .stock-solapa-activa { color: var(--text-primary, #fff); border-color: rgba(61, 220, 60, 0.6); background: rgba(61, 220, 60, 0.08); }
@@ -8339,6 +8393,10 @@ function JopexPanel() {
             height: calc(58px + env(safe-area-inset-top));
           }
           .jopex-header .logo-wrap img { height: 32px; }
+          .jopex-header .logo-wrap { display: none; }
+          .menu-btn { position: static; transform: none; max-width: 38vw; flex-shrink: 0; }
+          .buscador-sku { position: static; transform: none; flex: 1; width: auto; margin-left: 10px; }
+          .buscador-sku-lista { left: 0; right: auto; width: 100%; }
 
           /* El cuerpo deja de ser dos columnas: scrollea la página entera. */
           .jopex-body { display: block; }
@@ -8468,7 +8526,7 @@ function JopexPanel() {
   }, /*#__PURE__*/React.createElement("img", {
     src: LOGO_SRC,
     alt: "JOPEX"
-  }))), /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement(BuscadorSku, { productos: productos, stockProductos: stockProductos, onIr: irA })), /*#__PURE__*/React.createElement("div", {
     className: "jopex-body"
   }, menuAbierto ? /*#__PURE__*/React.createElement("div", {
     className: "menu-tapa",
