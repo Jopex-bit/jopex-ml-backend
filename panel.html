@@ -744,13 +744,21 @@ function EvolucionPanel() {
     }));
   };
   const hoy = new Date();
+  // Dólar de cada mes: el que cargues en la fila "Dólar del mes" o, si está vacío, el Belo guardado hoy.
+  const tcHoy = tcBeloGuardado();
+  const tcDeMes = mes => tcValido(datos[mes] && datos[mes].tcMes) || tcHoy;
   const enCurso = EVOLUCION_MESES.map(mes => evolucionEnCurso(mes, hoy));
   const resultados = EVOLUCION_MESES.map(mes => calcularEvolucionMes(datos[mes]));
   // Los períodos en curso no entran en el acumulado ni en mejor/peor mes.
   const mesesConDatos = resultados.filter((r, i) => r != null && !enCurso[i]);
   const mesesEnCursoConDatos = EVOLUCION_MESES.filter((m, i) => resultados[i] != null && enCurso[i]);
-  const celdaCalc = (r, i, campo) => !r ? '—' : enCurso[i] ? 'En curso' : money(r[campo]);
+  const celdaCalc = (r, i, campo) => !r ? '—' : enCurso[i] ? 'En curso' : moneyDual(r[campo], tcDeMes(EVOLUCION_MESES[i]));
   const resultadoAcumulado = mesesConDatos.reduce((s, r) => s + r.resultadoNeto, 0);
+  // En dólares, cada mes se convierte con su propio dólar.
+  const netosUsd = EVOLUCION_MESES.map((m, i) => resultados[i] != null && !enCurso[i] && tcDeMes(m) ? resultados[i].resultadoNeto / tcDeMes(m) : null);
+  const usdOk = netosUsd.filter(v => v != null);
+  const todosConTc = mesesConDatos.length > 0 && usdOk.length === mesesConDatos.length;
+  const conUsd = (ars, usd) => ars == null ? '—' : money(ars) + (usd != null ? ' · ' + moneyUsd(usd) : '');
   const mejorMes = mesesConDatos.length ? Math.max(...mesesConDatos.map(r => r.resultadoNeto)) : null;
   const peorMes = mesesConDatos.length ? Math.min(...mesesConDatos.map(r => r.resultadoNeto)) : null;
   const hGuia = React.createElement;
@@ -800,7 +808,7 @@ function EvolucionPanel() {
     className: "kpi-label"
   }, "Resultado neto acumulado"), /*#__PURE__*/React.createElement("div", {
     className: "kpi-value"
-  }, mesesConDatos.length ? money(resultadoAcumulado) : '—'), /*#__PURE__*/React.createElement("div", {
+  }, mesesConDatos.length ? conUsd(resultadoAcumulado, todosConTc ? usdOk.reduce((a, b) => a + b, 0) : null) : '—'), /*#__PURE__*/React.createElement("div", {
     className: "kpi-sub"
   }, mesesConDatos.length, " mes(es) con datos", mesesEnCursoConDatos.length ? " · " + mesesEnCursoConDatos.join(", ") + " en curso, no incluido" : "")), /*#__PURE__*/React.createElement("div", {
     className: "kpi-card kpi-blue"
@@ -808,13 +816,13 @@ function EvolucionPanel() {
     className: "kpi-label"
   }, "Mejor mes"), /*#__PURE__*/React.createElement("div", {
     className: "kpi-value"
-  }, mejorMes != null ? money(mejorMes) : '—')), /*#__PURE__*/React.createElement("div", {
+  }, mejorMes != null ? conUsd(mejorMes, todosConTc ? Math.max(...usdOk) : null) : '—')), /*#__PURE__*/React.createElement("div", {
     className: `kpi-card ${peorMes != null && peorMes < 0 ? 'kpi-red' : 'kpi-amber'}`
   }, /*#__PURE__*/React.createElement("div", {
     className: "kpi-label"
   }, "Peor mes"), /*#__PURE__*/React.createElement("div", {
     className: "kpi-value"
-  }, peorMes != null ? money(peorMes) : '—'))), /*#__PURE__*/React.createElement("div", {
+  }, peorMes != null ? conUsd(peorMes, todosConTc ? Math.min(...usdOk) : null) : '—'))), /*#__PURE__*/React.createElement("div", {
     className: "table-section"
   }, /*#__PURE__*/React.createElement("div", {
     className: "table-scroll"
@@ -828,7 +836,7 @@ function EvolucionPanel() {
     className: "evo-periodo"
   }, evolucionPeriodoTexto(mes)), enCurso[EVOLUCION_MESES.indexOf(mes)] ? /*#__PURE__*/React.createElement("div", {
     className: "evo-encurso"
-  }, "En curso") : null)))), /*#__PURE__*/React.createElement("tbody", null, EVOLUCION_CAMPOS.map(c => renderFila(c.label, c.key)), /*#__PURE__*/React.createElement("tr", {
+  }, "En curso") : null)))), /*#__PURE__*/React.createElement("tbody", null, renderFila('Dólar del mes (opcional)', 'tcMes'), EVOLUCION_CAMPOS.map(c => renderFila(c.label, c.key)), /*#__PURE__*/React.createElement("tr", {
     className: "evo-subtotal-row"
   }, /*#__PURE__*/React.createElement("td", {
     className: "evo-row-label"
@@ -1541,14 +1549,14 @@ function PrecioManualBloque({ p, r, tasasCuotas, onUpdate, tcBelo }) {
     !m && h('div', { className: 'sub-empty' }, 'Ingresá un precio para ver el desglose.'),
     m && h(React.Fragment, null,
       h('div', { className: 'costo-out-grid' },
-        h(CampoCalculado, { label: 'Comisión variable (' + cargoPct + '%)', value: money(m.comVar) }),
-        h(CampoCalculado, { label: m.fijo > 0 ? 'Cargo fijo por venta' : 'Cargo fijo (no aplica)', value: m.fijo > 0 ? money(m.fijo) : '$0', highlight: m.fijo > 0 }),
-        h(CampoCalculado, { label: 'Financiamiento (' + ((p.cuotas || '6') === 'sin' ? 'sin cuotas' : (p.cuotas || '6') + ' cuotas') + ')', value: money(m.fin) }),
-        h(CampoCalculado, { label: 'Envío al cliente', value: money(m.envio) }),
-        h(CampoCalculado, { label: 'Costo del producto', value: money(r.costoProductoARS) }),
-        h(CampoCalculado, { label: 'Depósito de Mercado Libre', value: money(m.deposito), highlight: true }),
+        h(CampoCalculado, { label: 'Comisión variable (' + cargoPct + '%)', value: moneyDual(m.comVar) }),
+        h(CampoCalculado, { label: m.fijo > 0 ? 'Cargo fijo por venta' : 'Cargo fijo (no aplica)', value: m.fijo > 0 ? moneyDual(m.fijo) : '$0', highlight: m.fijo > 0 }),
+        h(CampoCalculado, { label: 'Financiamiento (' + ((p.cuotas || '6') === 'sin' ? 'sin cuotas' : (p.cuotas || '6') + ' cuotas') + ')', value: moneyDual(m.fin) }),
+        h(CampoCalculado, { label: 'Envío al cliente', value: moneyDual(m.envio) }),
+        h(CampoCalculado, { label: 'Costo del producto', value: moneyDual(r.costoProductoARS) }),
+        h(CampoCalculado, { label: 'Depósito de Mercado Libre', value: moneyDual(m.deposito), highlight: true }),
         h(CampoCalculado, { label: 'Margen real (%)', value: pct(m.margenPct), highlight: true, danger: m.margen <= 0 }),
-        h(CampoCalculado, { label: 'Margen real por unidad ($)', value: money(m.margen), highlight: true, danger: m.margen <= 0 }),
+        h(CampoCalculado, { label: 'Margen real por unidad ($)', value: moneyDual(m.margen), highlight: true, danger: m.margen <= 0 }),
         tcBelo >= 100 && h(CampoCalculado, { label: 'Margen real por unidad (USD)', value: moneyUsd(m.margen / tcBelo), highlight: true, danger: m.margen <= 0 })),
       !isNaN(objetivo) && objetivo > 0 && h('div', { className: 'tramo-nota' },
         Math.abs(m.margenPct - objetivo) < 0.05
@@ -1626,9 +1634,9 @@ function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate
       h('div', { className: 'costo-block' },
         h('h4', null, 'Costo del producto'),
         ef
-          ? h(CampoCalculado, { label: 'Valor de Adquisición (suma de componentes)', value: money(ef.total), highlight: true })
+          ? h(CampoCalculado, { label: 'Valor de Adquisición (suma de componentes)', value: moneyDual(ef.total), highlight: true })
           : loteCosto
-            ? h(CampoCalculado, { label: 'Valor de Adquisición (costo del lote en uso)', value: money(loteCosto.costo.valor), highlight: true })
+            ? h(CampoCalculado, { label: 'Valor de Adquisición (costo del lote en uso)', value: moneyDual(loteCosto.costo.valor), highlight: true })
             : h(CampoInput, { label: 'Valor de Adquisición (último lote)', prefix: '$', value: prim.valorAdquisicion, onChange: v => onUpdateGrupo('valorAdquisicion', v) }),
         loteCosto && h('div', { className: 'lote-info' },
           'Lote ' + loteCosto.enUso.n + ': quedan ' + loteCosto.enUso.quedan + ' de ' + loteCosto.enUso.unidades + ' u · ' +
@@ -1656,21 +1664,21 @@ function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate
                   h('div', { className: 'muted', style: { fontSize: 11 } }, (f.m.mlItemId || 'sin publicar') + (tres ? '' : ' · ' + cuotaTxt(f.cuotas))),
                   f.prox.length > 0 && h('div', { className: 'muted', style: { fontSize: 11 }, title: f.prox.map(x => fechaHoraCorta(x.desde) + ' → ' + fechaHoraCorta(x.hasta) + ' · ' + money(x.precio)).join('\n') },
                     f.prox.length + ' oferta' + (f.prox.length > 1 ? 's' : '') + ' programada' + (f.prox.length > 1 ? 's' : '') + ' · próxima ' + fechaHoraCorta(f.prox[0].desde))),
-                h('td', null, f.r && !f.r.error ? money(f.r.precio) : '—'),
-                h('td', null, f.pub > 0 ? money(f.pub) : '—'),
+                h('td', null, f.r && !f.r.error ? moneyDual(f.r.precio) : '—'),
+                h('td', null, f.pub > 0 ? moneyDual(f.pub) : '—'),
                 h('td', null, f.promo
-                  ? h('div', null, h('b', null, money(Number(f.promo.precio))), (f.promo.descuento_pct != null ? ' (−' + pct(f.promo.descuento_pct) + ')' : ''),
+                  ? h('div', null, h('b', null, moneyDual(Number(f.promo.precio))), (f.promo.descuento_pct != null ? ' (−' + pct(f.promo.descuento_pct) + ')' : ''),
                       h('div', { className: 'muted', style: { fontSize: 11 } }, (f.promo.campana || f.promo.tipo) + (f.promo.hasta ? ' · hasta ' + fechaHoraCorta(f.promo.hasta) : '')))
                   : '—'),
                 h('td', { style: { fontWeight: 700, color: (f.mpromo || f.mp) ? colorMargen((f.mpromo || f.mp).margenPct, f.obj) : undefined } },
-                  (f.mpromo || f.mp) ? pct((f.mpromo || f.mp).margenPct) + ' · ' + money((f.mpromo || f.mp).margen) : '—'),
+                  (f.mpromo || f.mp) ? pct((f.mpromo || f.mp).margenPct) + ' · ' + moneyDual((f.mpromo || f.mp).margen) : '—'),
                 h('td', { style: { color: f.mp ? colorMargen(f.mp.margenPct, f.obj) : undefined } },
-                  f.mp ? pct(f.mp.margenPct) + ' · ' + money(f.mp.margen) : '—'),
+                  f.mp ? pct(f.mp.margenPct) + ' · ' + moneyDual(f.mp.margen) : '—'),
                 h('td', null, h('div', { className: 'calc-field-input' },
                   h('span', { className: 'cell-prefix' }, '$'),
                   h('input', { type: 'number', value: f.m.precioManual || '', placeholder: '—', onChange: e => onUpdateMiembro(f.m.id, 'precioManual', e.target.value) }))),
                 h('td', { style: { color: f.mm ? colorMargen(f.mm.margenPct, f.obj) : undefined } },
-                  f.mm ? pct(f.mm.margenPct) + ' · ' + money(f.mm.margen) : '—'),
+                  f.mm ? pct(f.mm.margenPct) + ' · ' + moneyDual(f.mm.margen) : '—'),
                 h('td', null, h('button', {
                   type: 'button', className: 'add-btn ghost-btn',
                   onClick: () => setAbierta(a => a === f.m.id ? '' : f.m.id)
@@ -1787,11 +1795,11 @@ function ProductoCostoCard({
     className: "costo-block"
   }, /*#__PURE__*/React.createElement("h4", null, "Costo del producto"), (ef ? /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Valor de Adquisición (suma de componentes)",
-    value: money(ef.total),
+    value: moneyDual(ef.total),
     highlight: true
   }) : loteCosto ? /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Valor de Adquisición (costo del lote en uso)",
-    value: money(loteCosto.costo.valor),
+    value: moneyDual(loteCosto.costo.valor),
     highlight: true
   }) : /*#__PURE__*/React.createElement(CampoInput, {
     label: "Valor de Adquisición (último lote)",
@@ -1856,7 +1864,7 @@ function ProductoCostoCard({
     }
   }, r.error), r && !r.error && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "precio-hero"
-  }, money(r.precio)), /*#__PURE__*/React.createElement("div", {
+  }, moneyDual(r.precio)), /*#__PURE__*/React.createElement("div", {
     className: "tramo-nota"
   }, r.cargoFijo > 0
     ? 'Tramo con cargo fijo: a ' + money(r.precio) + ' Mercado Libre suma ' + money(r.cargoFijo) +
@@ -1868,23 +1876,23 @@ function ProductoCostoCard({
     className: "costo-out-grid"
   }, /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Comisión variable (" + p.cargoVenta + "%)",
-    value: money(r.comisionML - r.cargoFijo)
+    value: moneyDual(r.comisionML - r.cargoFijo)
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: r.cargoFijo > 0 ? "Cargo fijo por unidad" : "Cargo fijo (no aplica)",
-    value: r.cargoFijo > 0 ? money(r.cargoFijo) : "$0",
+    value: r.cargoFijo > 0 ? moneyDual(r.cargoFijo) : "$0",
     highlight: r.cargoFijo > 0
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Financiamiento (" + r.cuotas + " cuotas)",
-    value: money(r.financiamientoARS)
+    value: moneyDual(r.financiamientoARS)
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Envío al cliente",
-    value: money(r.envioCliente)
+    value: moneyDual(r.envioCliente)
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Costo del producto",
-    value: money(r.costoProductoARS)
+    value: moneyDual(r.costoProductoARS)
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Depósito de Mercado Libre",
-    value: money(r.depositoML)
+    value: moneyDual(r.depositoML)
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Ganancia s/costo producto",
     value: pct(r.gananciaSobreCosto)
@@ -1898,7 +1906,7 @@ function ProductoCostoCard({
     highlight: true
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Margen real ($)",
-    value: money(r.reciboPorVenta),
+    value: moneyDual(r.reciboPorVenta),
     highlight: true
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Margen real (USD)",
@@ -1966,7 +1974,7 @@ function ProductoCostoCard({
     fecha: p.promoFechaFin
   })), /*#__PURE__*/React.createElement("div", {
     className: "precio-hero precio-hero-promo"
-  }, money(r.promo.precioFinal)), r.promo.aparecioFijo && /*#__PURE__*/React.createElement("div", {
+  }, moneyDual(r.promo.precioFinal)), r.promo.aparecioFijo && /*#__PURE__*/React.createElement("div", {
     className: "aviso-salto aviso-rojo"
   }, "Al bajar a " + money(r.promo.precioFinal) + " el producto entra en un tramo con cargo fijo de " +
      money(r.promo.cargoFijoPromo) + " por unidad, que sin la promo no pagabas."),
@@ -1974,27 +1982,27 @@ function ProductoCostoCard({
     className: "costo-out-grid"
   }, /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Comisión variable (" + p.cargoVenta + "%)",
-    value: money(r.promo.comisionMLPromo - r.promo.cargoFijoPromo)
+    value: moneyDual(r.promo.comisionMLPromo - r.promo.cargoFijoPromo)
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: r.promo.cargoFijoPromo > 0 ? "Cargo fijo por unidad" : "Cargo fijo (no aplica)",
-    value: r.promo.cargoFijoPromo > 0 ? money(r.promo.cargoFijoPromo) : "$0",
+    value: r.promo.cargoFijoPromo > 0 ? moneyDual(r.promo.cargoFijoPromo) : "$0",
     highlight: r.promo.cargoFijoPromo > 0
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Costo por cuotas",
-    value: money(r.promo.financiamientoARSPromo)
+    value: moneyDual(r.promo.financiamientoARSPromo)
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Costo de envío",
-    value: money(r.envioCliente)
+    value: moneyDual(r.envioCliente)
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Recibís (depósito de ML)",
-    value: money(r.promo.recibisML),
+    value: moneyDual(r.promo.recibisML),
     highlight: true
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Costo del producto",
-    value: money(r.costoProductoARS)
+    value: moneyDual(r.costoProductoARS)
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Ganancia neta real",
-    value: money(r.promo.gananciaNetaPromo),
+    value: moneyDual(r.promo.gananciaNetaPromo),
     highlight: true
   }), /*#__PURE__*/React.createElement(CampoCalculado, {
     label: "Margen real (con promo)",
@@ -2210,6 +2218,7 @@ function CostosPanel({
     } catch (e) { return ''; }
   });
   const [tcBeloError, setTcBeloError] = useState('');
+  TC_VISTA = tcValido(tcBelo) || 0;
   const guardarTC = (valor, actualizado) => {
     setTcBeloState(valor);
     setTcBeloFuente(actualizado);
@@ -2797,6 +2806,16 @@ function cotizacionVacia() {
 const moneyUsd = n => n === '' || n == null || isNaN(n) ? '—' : `US$${Number(n).toLocaleString('es-AR', {
   maximumFractionDigits: 2
 })}`;
+
+// Pesos y dólares (Belo) en la misma línea. El panel que se está dibujando (Costos o Evolución) fija el TC
+// de la vista antes de renderizar; sin un TC válido muestra solo pesos.
+let TC_VISTA = 0;
+const moneyDual = (n, tc) => {
+  const t = tc != null ? tc : TC_VISTA;
+  if (n === '' || n == null || isNaN(n)) return '—';
+  return t >= 100 ? money(n) + ' · ' + moneyUsd(Number(n) / t) : money(n);
+};
+const tcBeloGuardado = () => { try { const s = window.localStorage.getItem('jopex_tc_belo'); const v = s ? Number(JSON.parse(s).valor) : 0; return v >= 100 ? v : 0; } catch (e) { return 0; } };
 
 // ---------- Cotización con LÍNEAS de producto ----------
 // Una cotización puede traer 1 o 2 productos distintos (ej: collar + dispositivo GPS)
