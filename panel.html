@@ -3971,7 +3971,9 @@ function calcularModeloStock(p) {
   const flexActivo = !!(flexCorte || flexDesdeMov);
   const flexDesde = flexCorte || flexDesdeMov;
   const ventasFlexDesde = !flexActivo ? 0 : (p.ventasDiariasFlex || []).filter(d => d.fecha > flexCorte).reduce((t, d) => t + (Number(d.unidades) || 0), 0);
-  const movFlexNeto = movs.filter(m => m.fecha > flexCorte).reduce((t, m) => t + signo(m), 0);
+  // Un envío a Flex "en camino" ya salió de tu depósito pero todavía no está en el depósito del courier.
+  const enCaminoAFlex = movs.filter(m => m.tipo !== 'devolucion' && m.estado === 'enCamino').reduce((t, m) => t + (Number(m.unidades) || 0), 0);
+  const movFlexNeto = movs.filter(m => m.fecha > flexCorte && m.estado !== 'enCamino').reduce((t, m) => t + signo(m), 0);
   const flexStock = flexActivo ? Math.max(0, flexBase + movFlexNeto - ventasFlexDesde) : 0;
   const flexDescuadre = flexActivo && flexBase + movFlexNeto - ventasFlexDesde < 0 ? flexBase + movFlexNeto - ventasFlexDesde : 0;
   // Lo enviado a Flex después del conteo propio ya no está en tu depósito.
@@ -3998,7 +4000,7 @@ function calcularModeloStock(p) {
   const depositoSugerido = Math.max(0, recibidasTotal - despachadoAFullTotal - vendidasPropias - movs.reduce((t, m) => t + signo(m), 0));
   // Control de coherencia: no podés vender por FULL más de lo que mandaste a FULL.
   const faltaDespachoFull = Math.max(0, vendidasFull - despachadoAFullTotal);
-  const stockFisicoActual = stockFull + enDepositoPropio + flexStock + enCaminoAFull;
+  const stockFisicoActual = stockFull + enDepositoPropio + flexStock + enCaminoAFull + enCaminoAFlex;
   const comprometida = Number(p.demandaComprometida) || 0;
   const totalDisponible = stockFisicoActual + ordenesEnTransito - comprometida;
 
@@ -4006,7 +4008,7 @@ function calcularModeloStock(p) {
   // Lo que recibiste menos lo que vendiste debería igualar la suma de los tres lugares.
   const vendidoTotal = (p.ventasMensuales || []).reduce((s, m) => s + (Number(m.unidades) || 0), 0);
   const deberiaHaber = recibidasTotal - vendidoTotal;
-  const hayContado = stockFull + enDepositoPropio + flexStock + enCaminoAFull;
+  const hayContado = stockFull + enDepositoPropio + flexStock + enCaminoAFull + enCaminoAFlex;
   const descuadre = hayContado - deberiaHaber;
   const cantidadAPedir = Math.max(0, Max - totalDisponible);
   const capitalAInvertir = cantidadAPedir * (Number(p.costoLandedUsd) || 0);
@@ -4027,6 +4029,7 @@ function calcularModeloStock(p) {
     enDepositoPropio,
     flexActivo,
     flexStock,
+    enCaminoAFlex,
     flexDescuadre,
     flexDesde,
     ritmoFlex,
@@ -4091,7 +4094,7 @@ function ResumenStockRow({
 // funcionando igual. Un envío "compartido" no cambia el modelo: cada producto conserva su propia
 // fila (con su cantidad) y las filas de la misma caja comparten un grupo (grupoIntl / grupoFull);
 // al editar un campo común en una fila, se replica en las demás del grupo.
-const ENVIO_GRUPO_INTL = ['courierIntl', 'trackingIntl', 'fechaPago', 'fechaDespachoOrigen', 'fechaLlegadaAduana', 'fechaLlegadaDeposito'];
+const ENVIO_GRUPO_INTL = ['courierIntl', 'trackingIntl', 'fechaPago', 'fechaDespachoOrigen', 'fechaLlegadaAduana', 'fechaLlegadaDeposito', 'arancelesPagados'];
 const ENVIO_GRUPO_FULL = ['courierFull', 'trackingFull', 'gestionFull', 'fechaDespachoFull', 'fechaLlegadaFull'];
 const COURIERS_INTL = ['DHL', 'FedEx', 'UPS', 'Otro'];
 function urlSeguimiento(courier, numero) {
@@ -4240,6 +4243,95 @@ function EnvioDetalle({ p, e, todos, cotizaciones, onUpdate, onLink }) {
             : null)),
       selectorCompartir('full')));
 }
+
+// ---------- Stock: tarjetas por lugar (FULL / Flex / Rodríguez Peña) ----------
+function TarjetasUbicacion({ seleccionado, r, famSel }) {
+  const h = React.createElement;
+  const num = v => (v === '' || v == null || isNaN(v) ? 0 : Number(v));
+  // FULL va por SKU: una línea por cada SKU que sale por FULL (si no se sabe la logística, el principal).
+  let skusFull = [];
+  if (famSel) {
+    const fl = famSel.grupos.filter(g => g.logistica === 'fulfillment');
+    skusFull = (famSel.sabeLogistica ? fl : famSel.grupos.slice(0, 1)).map(g => ({ sku: g.sku || g.virtual.nombre, n: num(g.virtual.stockFull) }));
+  } else {
+    skusFull = [{ sku: (seleccionado.sku || '').trim() || seleccionado.nombre, n: num(seleccionado.stockFull) }];
+  }
+  const tarjeta = (cls, titulo, valor, lineas) => h('div', { className: 'ubic-card ' + cls },
+    h('div', { className: 'ubic-titulo' }, titulo),
+    h('div', { className: 'ubic-valor' }, valor, h('span', null, ' u')),
+    h('div', { className: 'ubic-sub' }, lineas));
+  return h('div', { className: 'ubic-row' },
+    tarjeta('ubic-full', 'Stock FULL', r.stockFull, skusFull.map((x, i) => h('div', { key: i }, x.sku + ': ' + x.n + ' u'))),
+    tarjeta('ubic-flex', 'Stock Flex', r.flexStock, r.flexActivo ? (famSel ? 'Familia ' + seleccionado.familia : '') : 'Flex todavía no está activo'),
+    tarjeta('ubic-rp', 'Stock Rodríguez Peña', r.enDepositoPropio, famSel ? 'Familia ' + seleccionado.familia : ''));
+}
+
+// ---------- Stock: en tránsito (importación, reposición a FULL/Flex, devoluciones) ----------
+function TransitoStock({ p, r, updateEnvio, updateMovFlex, famSel }) {
+  const h = React.createElement;
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const f = s => (s ? new Date(s + 'T00:00:00') : null);
+  const activos = (p.envios || []).filter(e => !e.noCuenta && Number(e.cantidad) > 0);
+  const importaciones = activos.filter(e => { const d = f(e.fechaLlegadaDeposito); return !d || d > hoy; });
+  const aFull = activos.filter(e => {
+    if (!(Number(e.unidadesFull) > 0) || !e.fechaDespachoFull) return false;
+    const ll = f(e.fechaLlegadaFull);
+    if (ll && ll <= hoy) return false;
+    return !(!ll && (hoy - f(e.fechaDespachoFull)) / 86400000 > DIAS_FULL_SIN_LLEGADA);
+  });
+  const aFlex = (p.movimientosFlex || []).filter(m => m.tipo === 'envio' && m.estado === 'enCamino' && Number(m.unidades) > 0);
+  const link = (courier, num) => { const u = urlSeguimiento(courier, num); return u ? h('a', { href: u, target: '_blank', rel: 'noreferrer', className: 'link-btn' }, 'Ver seguimiento') : h('span', { className: 'muted' }, courier === 'Otro' ? 'sin link' : '—'); };
+  const celda = (child) => h('td', { className: 'editable-cell' }, child);
+  const input = (type, value, on, ph) => h('input', { type, value: value || '', placeholder: ph, onChange: ev => on(ev.target.value) });
+  const seccion = (titulo, total, sub, cuerpo) => h('div', { className: 'table-section' },
+    h('div', { className: 'table-section-header' }, h('h2', null, titulo), h('span', { className: 'muted' }, total)),
+    sub && h('div', { className: 'sub-empty', style: { margin: '0 16px 8px' } }, sub),
+    cuerpo);
+  const tabla = (cols, filas, vacio) => h('div', { className: 'table-scroll' }, h('table', null,
+    h('thead', null, h('tr', null, cols.map((c, i) => h('th', { key: i }, c)))),
+    h('tbody', null, filas.length === 0 ? h('tr', { className: 'empty-row' }, h('td', { colSpan: cols.length }, vacio)) : filas)));
+  const sum = (arr, g) => arr.reduce((t, x) => t + (Number(g(x)) || 0), 0);
+  return h('div', null,
+    seccion('A. Importación — China → Rodríguez Peña', sum(importaciones, e => e.cantidad) + ' u en camino',
+      'Cargá el tracking a mano: el botón abre la página del courier con ese número. Mientras diga "No pagó", el envío está retenido en aduana.',
+      tabla(['Lote', 'Unidades', 'Courier', 'Tracking', 'Seguimiento', 'Llegada estimada', 'Aranceles', 'Estado'],
+        importaciones.map(e => {
+          const pago = e.arancelesPagados === true || e.arancelesPagados === 'si';
+          return h('tr', { key: e.id },
+            h('td', null, e.fechaPago || '—'),
+            h('td', null, e.cantidad),
+            celda(h('select', { value: e.courierIntl || '', onChange: ev => updateEnvio(p.id, e.id, 'courierIntl', ev.target.value) }, h('option', { value: '' }, '—'), COURIERS_INTL.map(c => h('option', { key: c, value: c }, c)))),
+            celda(input('text', e.trackingIntl, v => updateEnvio(p.id, e.id, 'trackingIntl', v), 'nº de tracking')),
+            h('td', null, link(e.courierIntl, e.trackingIntl)),
+            celda(input('date', e.fechaLlegadaDeposito, v => updateEnvio(p.id, e.id, 'fechaLlegadaDeposito', v))),
+            celda(h('select', { value: pago ? 'si' : 'no', onChange: ev => updateEnvio(p.id, e.id, 'arancelesPagados', ev.target.value === 'si') }, h('option', { value: 'no' }, 'No pagó'), h('option', { value: 'si' }, 'Pagó'))),
+            h('td', null, pago ? 'Aranceles pagados' : 'Falta pagar aranceles'));
+        }), 'No hay importaciones en camino.')),
+    seccion('B. Reposición — Rodríguez Peña → FULL / Flex', (sum(aFull, e => e.unidadesFull) + sum(aFlex, m => m.unidades)) + ' u en camino', null,
+      tabla(['Destino', 'Unidades', 'Courier', 'Tracking', 'Seguimiento', 'Llegada estimada', ''],
+        aFull.map(e => h('tr', { key: 'f' + e.id },
+          h('td', null, 'FULL'),
+          h('td', null, e.unidadesFull),
+          celda(input('text', e.courierFull == null ? 'Andreani' : e.courierFull, v => updateEnvio(p.id, e.id, 'courierFull', v))),
+          celda(input('text', e.trackingFull, v => updateEnvio(p.id, e.id, 'trackingFull', v), 'nº de seguimiento')),
+          h('td', null, (e.courierFull == null ? 'andreani' : (e.courierFull || '').trim().toLowerCase()) === 'andreani'
+            ? h('a', { href: 'https://www.andreani.com/', target: '_blank', rel: 'noreferrer', className: 'link-btn' }, 'Abrir Andreani')
+            : link(e.courierFull, e.trackingFull)),
+          celda(input('date', e.fechaLlegadaFull, v => updateEnvio(p.id, e.id, 'fechaLlegadaFull', v))),
+          h('td', null, '')))
+        .concat(aFlex.map(m => h('tr', { key: 'x' + m.id },
+          h('td', null, 'Flex'),
+          h('td', null, m.unidades),
+          celda(input('text', m.courier, v => updateMovFlex(p.id, m.id, 'courier', v))),
+          celda(input('text', m.tracking, v => updateMovFlex(p.id, m.id, 'tracking', v), 'nº de seguimiento')),
+          h('td', null, link(m.courier, m.tracking)),
+          h('td', null, m.fecha),
+          h('td', null, h('button', { type: 'button', className: 'link-btn', onClick: () => updateMovFlex(p.id, m.id, 'estado', 'llego') }, 'Marcar que llegó'))))),
+        'No hay reposiciones en camino.')),
+    seccion('C. Devoluciones de compradores', '', null,
+      h('div', { className: 'sub-empty', style: { margin: '0 16px 12px' } },
+        'Pendiente: primero hay que comprobar que Mercado Libre deja leer las devoluciones de tu cuenta. Mientras tanto, lo que vuelve a FULL se ve solo en el stock FULL cuando Mercado Libre lo habilita.')));
+}
 function StockPanel({
   productosCostos,
   productos,
@@ -4253,6 +4345,7 @@ function StockPanel({
   const grupos = agruparStock(productos, productosCostos);
   const productosV = grupos.map(g => g.virtual);
   const familias = agruparFamiliasStock(grupos);
+  const [solapa, setSolapa] = useState('disponible');
   const [envioAbierto, setEnvioAbierto] = useState(null);
   const [selInterno, setSelInterno] = useState(STOCK_PRODUCTOS_INICIAL[0]?.id || null);
   // La selección del menú lateral manda; si no hay, vale la interna.
@@ -4504,7 +4597,7 @@ function StockPanel({
   const addMovFlex = (prodId, tipo) => {
     setProductos(prev => prev.map(p => p.id !== prodId ? p : {
       ...p,
-      movimientosFlex: [...(p.movimientosFlex || []), { id: `mf${Date.now()}`, fecha: new Date().toISOString().slice(0, 10), tipo, unidades: '', nota: '' }]
+      movimientosFlex: [...(p.movimientosFlex || []), { id: `mf${Date.now()}`, fecha: new Date().toISOString().slice(0, 10), tipo, unidades: '', nota: '', estado: tipo === 'envio' ? 'enCamino' : 'llego', courier: '', tracking: '' }]
     }));
   };
   const updateMovFlex = (prodId, movId, field, value) => {
@@ -4575,7 +4668,7 @@ function StockPanel({
       margin: 0,
       color: 'var(--text-primary)'
     }
-  }, seleccion ? (famSel ? "Familia " + famSel.nombre : "Producto seleccionado") : "Resumen — todos los productos"), /*#__PURE__*/React.createElement("div", {
+  }, seleccion ? "" : "Stock"), /*#__PURE__*/React.createElement("div", {
     style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }
   }, /*#__PURE__*/React.createElement("button", {
     className: "add-btn sync-btn",
@@ -4592,30 +4685,9 @@ function StockPanel({
   }), "Agregar producto"))),
   msgStock && /*#__PURE__*/React.createElement("div", { className: "sync-ok" }, msgStock),
   errStock && /*#__PURE__*/React.createElement("div", { className: "competencia-error" }, errStock),
-  /*#__PURE__*/React.createElement("div", {
-    className: "stock-resumen-list"
-  }, filasResumen.length === 0 && /*#__PURE__*/React.createElement("div", {
-    className: "sub-empty"
-  }, "Sin productos cargados todavía."),
-  filasResumen.map(({
-    p,
-    r,
-    tipo,
-    key,
-    factor
-  }) => tipo === 'sku' && famSel && seleccion
-    ? /*#__PURE__*/React.createElement("div", { key: 'sku-' + p.id, className: "stock-resumen-row", style: { opacity: 0.85, paddingLeft: 28, cursor: 'default' } },
-        /*#__PURE__*/React.createElement("span", { className: "stock-resumen-nombre" }, p.etiqueta || p.nombre),
-        /*#__PURE__*/React.createElement("span", { className: "stock-resumen-dato" }, "Ventas 6 m: ", /*#__PURE__*/React.createElement("b", null, (p.ventasMensuales || []).reduce((t, v) => t + (Number(v.unidades) || 0), 0)), factor > 1 ? ' × ' + factor + ' collares' : ''))
-    : /*#__PURE__*/React.createElement(ResumenStockRow, {
-        key: tipo + '-' + (key || p.id),
-        p: p,
-        r: r,
-        activo: (famSel ? key === famSel.key : p.id === selId) && tipo !== 'sku-info',
-        onClick: () => setSelectedId(tipo === 'familia' ? key : p.id)
-      }))), !seleccionado && /*#__PURE__*/React.createElement("div", {
+  !seleccionado && /*#__PURE__*/React.createElement("div", {
     className: "data-note"
-  }, "Elegí un producto en el menú de la izquierda (o agregá uno nuevo) para ver y editar el detalle."), seleccionado && /*#__PURE__*/React.createElement(React.Fragment, null, alertaSeleccionado === 'red' && rSeleccionado && /*#__PURE__*/React.createElement("div", {
+  }, "Elegí una familia o un SKU en el menú de la izquierda para ver su stock."), seleccionado && /*#__PURE__*/React.createElement(React.Fragment, null, alertaSeleccionado === 'red' && rSeleccionado && /*#__PURE__*/React.createElement("div", {
     className: "alert-banner"
   }, /*#__PURE__*/React.createElement(AlertTriangle, {
     size: 18
@@ -4654,16 +4726,14 @@ function StockPanel({
     "aria-label": "Eliminar producto"
   }, /*#__PURE__*/React.createElement(Trash2, {
     size: 16
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "sub-empty",
-    style: {
-      marginTop: -8,
-      marginBottom: 16
-    }
-  }, "La lista sale directo de los productos que ya cargaste en Costos, para que el nombre coincida siempre entre los dos módulos."),
+  }))), h('div', { className: 'stock-solapas' },
+    [['disponible', 'Stock disponible'], ['transito', 'Stock en tránsito']].map(([k, t]) => h('button', { key: k, type: 'button', className: 'stock-solapa' + (solapa === k ? ' stock-solapa-activa' : ''), onClick: () => setSolapa(k) }, t))),
+  solapa === 'transito' ? h(TransitoStock, { p: seleccionado, r: rSeleccionado, updateEnvio, updateMovFlex, famSel }) : React.createElement(React.Fragment, null,
+  
   rSeleccionado && rSeleccionado.fullSupuestas > 0 && /*#__PURE__*/React.createElement("div", {
     className: "data-note", style: { marginTop: -4, marginBottom: 16 }
   }, rSeleccionado.fullSupuestas + " unidades se despacharon a FULL hace más de " + DIAS_FULL_SIN_LLEGADA + " días y el envío no tiene fecha de llegada a FULL: se asumen ya recibidas (Mercado Libre ya las cuenta en el stock de FULL). Cargá la fecha real en el envío para quitar este aviso."),
+  rSeleccionado && h(TarjetasUbicacion, { seleccionado, r: rSeleccionado, famSel }),
   rSeleccionado ? /*#__PURE__*/React.createElement("div", {
     className: "kpi-row"
   }, /*#__PURE__*/React.createElement("div", {
@@ -4693,6 +4763,7 @@ function StockPanel({
   }, rSeleccionado.cantidadAPedir > 0 ? `≈ US$${rSeleccionado.capitalAInvertir.toLocaleString('es-AR')}` : 'sin necesidad de pedir'))) : /*#__PURE__*/React.createElement("div", {
     className: "data-note"
   }, "Cargá al menos 3 meses con Días con Stock ", '>', " 0 y al menos 1 envío con fecha de pago y fecha disponible para vender, para que el modelo calcule."),
+  React.createElement("details", { className: "stock-datos" }, React.createElement("summary", null, "Datos y cálculos (conteos, envíos, ventas, derivación)"),
   famSel && (() => {
     const h = React.createElement;
     const d = famSel.detalle;
@@ -5066,14 +5137,16 @@ function StockPanel({
       'Las ventas Flex superan lo enviado en ' + Math.abs(rSeleccionado.flexDescuadre) + ' u: falta cargar un envío o el conteo del courier está desactualizado.'),
     h('div', { className: 'table-scroll' },
       h('table', null,
-        h('thead', null, h('tr', null, h('th', null, 'Fecha'), h('th', null, 'Tipo'), h('th', null, 'Unidades'), h('th', null, 'Nota'), h('th', null))),
+        h('thead', null, h('tr', null, h('th', null, 'Fecha'), h('th', null, 'Tipo'), h('th', null, 'Unidades'), h('th', null, 'Estado'), h('th', null, 'Nota'), h('th', null))),
         h('tbody', null,
-          (seleccionado.movimientosFlex || []).length === 0 && h('tr', { className: 'empty-row' }, h('td', { colSpan: 5 }, 'Sin movimientos — cargá cada envío que mandás al depósito del courier.')),
+          (seleccionado.movimientosFlex || []).length === 0 && h('tr', { className: 'empty-row' }, h('td', { colSpan: 6 }, 'Sin movimientos — cargá cada envío que mandás al depósito del courier.')),
           (seleccionado.movimientosFlex || []).map(m => h('tr', { key: m.id },
             h('td', { className: 'editable-cell' }, h('input', { type: 'date', value: m.fecha, onChange: e => updateMovFlex(seleccionado.id, m.id, 'fecha', e.target.value) })),
             h('td', { className: 'editable-cell' }, h('select', { value: m.tipo, onChange: e => updateMovFlex(seleccionado.id, m.id, 'tipo', e.target.value) },
               h('option', { value: 'envio' }, 'Envío a Flex'), h('option', { value: 'devolucion' }, 'Devolución a mi depósito'))),
             h('td', { className: 'editable-cell' }, h('input', { type: 'number', value: m.unidades, onChange: e => updateMovFlex(seleccionado.id, m.id, 'unidades', e.target.value) })),
+            h('td', { className: 'editable-cell' }, m.tipo === 'envio' ? h('select', { value: m.estado === 'enCamino' ? 'enCamino' : 'llego', onChange: e => updateMovFlex(seleccionado.id, m.id, 'estado', e.target.value) },
+              h('option', { value: 'enCamino' }, 'En camino'), h('option', { value: 'llego' }, 'Ya llegó')) : '—'),
             h('td', { className: 'editable-cell' }, h('input', { type: 'text', value: m.nota || '', onChange: e => updateMovFlex(seleccionado.id, m.id, 'nota', e.target.value) })),
             h('td', { className: 'row-actions' }, h('button', { type: 'button', className: 'icon-btn', onClick: () => removeMovFlex(seleccionado.id, m.id) }, h(Trash2, { size: 14 }))))))))), /*#__PURE__*/React.createElement("div", {
     className: "table-section"
@@ -5186,7 +5259,7 @@ function StockPanel({
       /*#__PURE__*/React.createElement("div", { className: "deriv-resultado" },
         `Disponible = ${rSeleccionado.stockFull} en FULL + ${rSeleccionado.enDepositoPropio} en depósito + ${rSeleccionado.flexActivo ? rSeleccionado.flexStock + ' en Flex + ' : ''}${rSeleccionado.enCaminoAFull} en camino a FULL + ${rSeleccionado.ordenesEnTransito} importando − ${Number(seleccionado.demandaComprometida) || 0} comprometido = ${rSeleccionado.totalDisponible} u`),
       /*#__PURE__*/React.createElement("div", { className: "deriv-resultado" },
-        `A pedir = Máximo − Disponible = ${rSeleccionado.Max} − ${rSeleccionado.totalDisponible} = ${rSeleccionado.cantidadAPedir} u`))))));
+        `A pedir = Máximo − Disponible = ${rSeleccionado.Max} − ${rSeleccionado.totalDisponible} = ${rSeleccionado.cantidadAPedir} u`))))))));
 }
 function GenericModulePanel({
   moduleId
@@ -7538,6 +7611,21 @@ function JopexPanel() {
           grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
           gap: 14px;
         }
+        .stock-solapas { display: flex; gap: 8px; margin: 4px 0 16px; }
+        .stock-solapa { background: transparent; border: 1px solid var(--border, rgba(255,255,255,0.12)); color: var(--text-secondary, #9aa4b2); padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+        .stock-solapa-activa { color: var(--text-primary, #fff); border-color: rgba(61, 220, 60, 0.6); background: rgba(61, 220, 60, 0.08); }
+        .ubic-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 16px; }
+        .ubic-card { border-radius: 12px; padding: 16px 18px; border: 1px solid; background: #0d0d0d; }
+        .ubic-titulo { font-size: 14px; font-weight: 600; opacity: 0.9; }
+        .ubic-valor { font-size: 38px; font-weight: 700; line-height: 1.15; margin: 4px 0; }
+        .ubic-valor span { font-size: 16px; font-weight: 500; opacity: 0.7; }
+        .ubic-sub { font-size: 12px; opacity: 0.8; min-height: 16px; }
+        .ubic-full { border-color: rgba(61, 220, 60, 0.55); color: #3ddc3c; }
+        .ubic-flex { border-color: rgba(245, 197, 66, 0.6); color: #f5c542; }
+        .ubic-rp { border-color: rgba(74, 168, 255, 0.6); color: #4aa8ff; }
+        .stock-datos { margin-top: 22px; }
+        .stock-datos > summary { cursor: pointer; font-weight: 600; padding: 10px 0; color: var(--text-secondary, #9aa4b2); }
+        @media (max-width: 700px) { .ubic-row { grid-template-columns: 1fr; } }
         .stock-resumen-list {
           display: flex;
           flex-direction: column;
