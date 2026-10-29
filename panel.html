@@ -4058,42 +4058,11 @@ function fechaDisponibleEnvio(e) {
 }
 // Días después de los cuales un despacho a FULL sin fecha de llegada se da por recibido.
 const DIAS_FULL_SIN_LLEGADA = 30;
-function calcularModeloStock(p) {
-  const ritmos = p.ventasMensuales.filter(m => Number(m.dias) > 0).map(m => ({
-    ...m,
-    ritmo: Number(m.unidades) / Number(m.dias)
-  }));
-  if (ritmos.length < 3) return null;
-  const ultimos3 = ritmos.slice(-3);
-  const [dosAtras, anterior, reciente] = ultimos3;
-  const mesesUsados = [
-    { ...dosAtras, peso: 20 },
-    { ...anterior, peso: 30 },
-    { ...reciente, peso: 50 }
-  ];
-  const D = Math.round((0.5 * reciente.ritmo + 0.3 * anterior.ritmo + 0.2 * dosAtras.ritmo) * 100) / 100;
-  const Dmax = Math.round(Math.max(...ultimos3.map(m => m.ritmo)) * 100) / 100;
-  const detalleLead = p.envios.map(e => ({
-    pago: e.fechaPago,
-    disponible: fechaDisponibleEnvio(e),
-    dias: diasEntreFechas(e.fechaPago, fechaDisponibleEnvio(e))
-  })).filter(x => x.dias != null);
-  const leadTimes = detalleLead.map(x => x.dias);
-  if (leadTimes.length === 0) return null;
-  const Lmedido = leadTimes.reduce((a, b) => a + b, 0) / leadTimes.length;
-  const LmaxMedido = Math.max(...leadTimes);
-  const tPrevio = Number(p.tPrevio) || 0;
-  const tPosterior = Number(p.tPosterior) || 0;
-  const tPrevioMax = Number(p.tPrevioMax) || 0;
-  const tPosteriorMax = Number(p.tPosteriorMax) || 0;
-  const L = Lmedido + tPrevio + tPosterior;
-  const Lmax = LmaxMedido + tPrevioMax + tPosteriorMax;
-  const SS = Math.ceil(Dmax * Lmax - D * L);
-  const Min = Math.ceil(D * L + SS);
-  const N = Number(p.nDiasCobertura) || 0;
-  const Max = Math.round(Min + D * N);
-
-  // --- Físico y Tránsito automáticos ---
+// Dónde está el stock de un SKU ahora mismo: FULL, tu depósito, Flex, y lo que está en
+// camino (importación, reposición a FULL/Flex). A diferencia de calcularModeloStock, NO
+// necesita historial de ventas ni de envíos con lead time completo — funciona desde el
+// primer día de un SKU nuevo, aunque todavía no haya datos para calcular Mínimo/Máximo.
+function calcularUbicacionesStock(p) {
   const hoy = new Date();
   hoy.setHours(0, 0, 0, 0);
   const fechaBase = p.fechaConteoBase ? new Date(p.fechaConteoBase + 'T00:00:00') : null;
@@ -4108,7 +4077,7 @@ function calcularModeloStock(p) {
   let llegadasDespuesDelConteo = 0;
   let recibidasTotal = 0;
   let despachadoAFullTotal = 0;
-  p.envios.forEach(e => {
+  (p.envios || []).forEach(e => {
     const cant = Number(e.cantidad) || 0;
     if (!cant) return;
     const aFull = Number(e.unidadesFull) || 0;
@@ -4179,31 +4148,16 @@ function calcularModeloStock(p) {
   const depositoSugerido = Math.max(0, recibidasTotal - despachadoAFullTotal - vendidasPropias - movs.reduce((t, m) => t + signo(m), 0));
   // Control de coherencia: no podés vender por FULL más de lo que mandaste a FULL.
   const faltaDespachoFull = Math.max(0, vendidasFull - despachadoAFullTotal);
-  const stockFisicoActual = stockFull + enDepositoPropio + flexStock + enCaminoAFull + enCaminoAFlex;
   const comprometida = Number(p.demandaComprometida) || 0;
-  const totalDisponible = stockFisicoActual + ordenesEnTransito - comprometida;
 
   // ---- Control de consistencia ----
-  // Lo que recibiste menos lo que vendiste debería igualar la suma de los tres lugares.
+  // Lo que recibiste menos lo que vendiste debería igualar la suma de los lugares.
   const vendidoTotal = (p.ventasMensuales || []).reduce((s, m) => s + (Number(m.unidades) || 0), 0);
   const deberiaHaber = recibidasTotal - vendidoTotal;
   const hayContado = stockFull + enDepositoPropio + flexStock + enCaminoAFull + enCaminoAFlex;
   const descuadre = hayContado - deberiaHaber;
-  const cantidadAPedir = Math.max(0, Max - totalDisponible);
-  const capitalAInvertir = cantidadAPedir * (Number(p.costoLandedUsd) || 0);
+  const totalDisponible = hayContado + ordenesEnTransito - comprometida;
   return {
-    D,
-    Dmax,
-    Lmedido,
-    LmaxMedido,
-    L,
-    Lmax,
-    SS,
-    Min,
-    Max,
-    mesesUsados,
-    detalleLead,
-    stockFisicoActual,
     stockFull,
     enDepositoPropio,
     flexActivo,
@@ -4230,7 +4184,65 @@ function calcularModeloStock(p) {
     hayContado,
     descuadre,
     ordenesEnTransito,
-    totalDisponible,
+    totalDisponible
+  };
+}
+// El modelo de reposición (Mínimo / Máximo / cuánto pedir): necesita al menos 3 meses de
+// ventas con "días con stock" cargado y al menos 1 envío con lead time completo. Sin eso
+// no hay con qué calcular un ritmo de venta ni un tiempo de reposición, así que devuelve
+// null — pero "dónde está el stock ahora" (calcularUbicacionesStock) sigue disponible
+// aunque el SKU sea nuevo y todavía no tenga ninguno de esos dos datos.
+function calcularModeloStock(p) {
+  const ritmos = p.ventasMensuales.filter(m => Number(m.dias) > 0).map(m => ({
+    ...m,
+    ritmo: Number(m.unidades) / Number(m.dias)
+  }));
+  if (ritmos.length < 3) return null;
+  const ultimos3 = ritmos.slice(-3);
+  const [dosAtras, anterior, reciente] = ultimos3;
+  const mesesUsados = [
+    { ...dosAtras, peso: 20 },
+    { ...anterior, peso: 30 },
+    { ...reciente, peso: 50 }
+  ];
+  const D = Math.round((0.5 * reciente.ritmo + 0.3 * anterior.ritmo + 0.2 * dosAtras.ritmo) * 100) / 100;
+  const Dmax = Math.round(Math.max(...ultimos3.map(m => m.ritmo)) * 100) / 100;
+  const detalleLead = p.envios.map(e => ({
+    pago: e.fechaPago,
+    disponible: fechaDisponibleEnvio(e),
+    dias: diasEntreFechas(e.fechaPago, fechaDisponibleEnvio(e))
+  })).filter(x => x.dias != null);
+  const leadTimes = detalleLead.map(x => x.dias);
+  if (leadTimes.length === 0) return null;
+  const Lmedido = leadTimes.reduce((a, b) => a + b, 0) / leadTimes.length;
+  const LmaxMedido = Math.max(...leadTimes);
+  const tPrevio = Number(p.tPrevio) || 0;
+  const tPosterior = Number(p.tPosterior) || 0;
+  const tPrevioMax = Number(p.tPrevioMax) || 0;
+  const tPosteriorMax = Number(p.tPosteriorMax) || 0;
+  const L = Lmedido + tPrevio + tPosterior;
+  const Lmax = LmaxMedido + tPrevioMax + tPosteriorMax;
+  const SS = Math.ceil(Dmax * Lmax - D * L);
+  const Min = Math.ceil(D * L + SS);
+  const N = Number(p.nDiasCobertura) || 0;
+  const Max = Math.round(Min + D * N);
+  const u = calcularUbicacionesStock(p);
+  const cantidadAPedir = Math.max(0, Max - u.totalDisponible);
+  const capitalAInvertir = cantidadAPedir * (Number(p.costoLandedUsd) || 0);
+  return {
+    D,
+    Dmax,
+    Lmedido,
+    LmaxMedido,
+    L,
+    Lmax,
+    SS,
+    Min,
+    Max,
+    mesesUsados,
+    detalleLead,
+    stockFisicoActual: u.hayContado,
+    ...u,
     cantidadAPedir,
     capitalAInvertir
   };
@@ -4264,8 +4276,9 @@ function ResumenStockRow({
   }, "Min/Max: ", /*#__PURE__*/React.createElement("b", null, r.Min, "/", r.Max)), r.cantidadAPedir > 0 && /*#__PURE__*/React.createElement("span", {
     className: "stock-resumen-dato stock-resumen-pedir"
   }, "Pedir: ", /*#__PURE__*/React.createElement("b", null, r.cantidadAPedir))) : /*#__PURE__*/React.createElement("span", {
-    className: "stock-resumen-dato"
-  }, "faltan datos"));
+    className: "stock-resumen-dato",
+    title: "Sin ventas ni envíos cargados: todavía no hay con qué calcular un Mínimo/Máximo."
+  }, "sin datos para el modelo"));
 }
 
 // ---------- Stock: seguimiento de cada envío (courier, tracking, envío compartido) ----------
@@ -4424,25 +4437,114 @@ function EnvioDetalle({ p, e, todos, cotizaciones, onUpdate, onLink }) {
 }
 
 // ---------- Stock: tarjetas por lugar (FULL / Flex / Rodríguez Peña) ----------
-function TarjetasUbicacion({ seleccionado, r, famSel }) {
+// Un conteo puntual + su fecha, con el mismo formulario para Depósito propio y para Flex
+// (antes tenían nombres de campo y ubicaciones distintas en la pantalla — una fuente real
+// de confusión, porque en el fondo funcionan igual: contás una vez, el panel sigue solo).
+function ConteoManual({ titulo, valor, fecha, onValor, onFecha, abierto, onToggle, extraCampo }) {
   const h = React.createElement;
+  return abierto
+    ? h('div', { className: 'ubic-conteo-form' },
+        h(CampoInput, { label: 'Último conteo (u)', prefix: null, value: valor, onChange: onValor }),
+        h('label', { className: 'calc-field' },
+          h('span', { className: 'calc-field-label' }, 'Fecha del conteo'),
+          h('div', { className: 'calc-field-input' }, h('input', { type: 'date', value: fecha || '', onChange: e => onFecha(e.target.value) }))),
+        extraCampo || null,
+        h('button', { type: 'button', className: 'link-btn', onClick: onToggle }, 'Listo'))
+    : h('button', { type: 'button', className: 'add-btn ghost-btn ubic-conteo-btn', onClick: onToggle }, titulo);
+}
+function FilaUbicacionSecundaria({ titulo, valor }) {
+  const h = React.createElement;
+  return h('div', { className: 'ubic-sec-fila' },
+    h('span', { className: 'ubic-sec-titulo' }, titulo),
+    h('span', { className: 'ubic-sec-valor' }, valor, ' u'));
+}
+// ---------- Dónde está el stock, con los tres lugares explicados igual que se cargan ----------
+// FULL es el único 100% automático (lo trae "Sincronizar con Mercado Libre", sin ningún campo
+// para pisarlo a mano). Depósito propio y Flex son manuales pero IGUALES entre sí: un conteo
+// puntual con fecha (mismo formulario, mismo lugar en la tarjeta), y desde ahí el panel seguís
+// solo con lo que cargues en Envíos (depósito) o Movimientos Flex.
+function UbicacionesStock({ seleccionado, famSel, setCampo }) {
+  const h = React.createElement;
+  const u = calcularUbicacionesStock(seleccionado);
   const num = v => (v === '' || v == null || isNaN(v) ? 0 : Number(v));
+  const [abrirDeposito, setAbrirDeposito] = useState(false);
+  const [abrirFlex, setAbrirFlex] = useState(false);
   // FULL va por SKU: una línea por cada SKU que sale por FULL (si no se sabe la logística, el principal).
   let skusFull = [];
   if (famSel) {
     const fl = famSel.grupos.filter(g => g.logistica === 'fulfillment');
     skusFull = (famSel.sabeLogistica ? fl : famSel.grupos.slice(0, 1)).map(g => ({ sku: g.sku || g.virtual.nombre, n: num(g.virtual.stockFull) }));
   } else {
-    skusFull = [{ sku: (seleccionado.sku || '').trim() || seleccionado.nombre, n: num(seleccionado.stockFull) }];
+    skusFull = [{ sku: (seleccionado.sku || '').trim() || seleccionado.nombre, n: u.stockFull }];
   }
-  const tarjeta = (cls, titulo, valor, lineas) => h('div', { className: 'ubic-card ' + cls },
-    h('div', { className: 'ubic-titulo' }, titulo),
-    h('div', { className: 'ubic-valor' }, valor, h('span', null, ' u')),
-    h('div', { className: 'ubic-sub' }, lineas));
-  return h('div', { className: 'ubic-row' },
-    tarjeta('ubic-full', 'Stock FULL', r.stockFull, skusFull.map((x, i) => h('div', { key: i }, x.sku + ': ' + x.n + ' u'))),
-    tarjeta('ubic-flex', 'Stock Flex', r.flexStock, r.flexActivo ? (famSel ? 'Familia ' + seleccionado.familia : '') : 'Flex todavía no está activo'),
-    tarjeta('ubic-rp', 'Stock Rodríguez Peña', r.enDepositoPropio, famSel ? 'Familia ' + seleccionado.familia : ''));
+  const sinDatos = (seleccionado.envios || []).length === 0 && (seleccionado.movimientosFlex || []).length === 0 &&
+    !seleccionado.stockFisicoBase && !seleccionado.flexConteo && !u.stockFull;
+  const conteoDeposito = h(ConteoManual, {
+    titulo: seleccionado.stockFisicoBase ? 'Actualizar conteo' : 'Cargar el primer conteo',
+    valor: seleccionado.stockFisicoBase, fecha: seleccionado.fechaConteoBase,
+    onValor: v => setCampo(seleccionado.id, 'stockFisicoBase', v),
+    onFecha: v => setCampo(seleccionado.id, 'fechaConteoBase', v),
+    abierto: abrirDeposito, onToggle: () => setAbrirDeposito(v => !v)
+  });
+  const conteoFlex = h(ConteoManual, {
+    titulo: seleccionado.flexConteo ? 'Actualizar conteo' : 'Cargar el primer conteo',
+    valor: seleccionado.flexConteo, fecha: seleccionado.flexFechaConteo,
+    onValor: v => setCampo(seleccionado.id, 'flexConteo', v),
+    onFecha: v => setCampo(seleccionado.id, 'flexFechaConteo', v),
+    abierto: abrirFlex, onToggle: () => setAbrirFlex(v => !v),
+    extraCampo: h(CampoInput, { label: 'Días de venta a tener en Flex', prefix: null, value: seleccionado.flexDiasCobertura, onChange: v => setCampo(seleccionado.id, 'flexDiasCobertura', v) })
+  });
+  return h('div', null,
+    sinDatos && h('div', { className: 'data-note', style: { marginBottom: 14 } },
+      'Todavía no cargaste nada para ' + (famSel ? 'esta familia' : 'este SKU') +
+      ' en Stock: ni conteo de depósito, ni envíos, ni Flex. Por eso tampoco hay Mínimo/Máximo más abajo — apenas cargues un dato, el panel empieza a calcular.'),
+    u.fullSupuestas > 0 && h('div', { className: 'data-note', style: { marginBottom: 14 } },
+      u.fullSupuestas + ' unidades se despacharon a FULL hace más de ' + DIAS_FULL_SIN_LLEGADA +
+      ' días y el envío no tiene fecha de llegada a FULL: se asumen ya recibidas (Mercado Libre ya las cuenta en el stock de FULL). Cargá la fecha real en el envío para quitar este aviso.'),
+    h('div', { className: 'ubic-row' },
+      h('div', { className: 'ubic-card ubic-full' },
+        h('div', { className: 'ubic-titulo' }, 'Stock FULL'),
+        h('div', { className: 'ubic-valor' }, u.stockFull, h('span', null, ' u')),
+        h('div', { className: 'ubic-sub ubic-auto' }, '🔒 Automático — lo trae "Sincronizar con Mercado Libre"'),
+        famSel && h('div', { className: 'ubic-sub' }, skusFull.map((x, i) => h('div', { key: i }, x.sku + ': ' + x.n + ' u')))),
+      h('div', { className: 'ubic-card ubic-rp' },
+        h('div', { className: 'ubic-titulo' }, 'Stock Rodríguez Peña'),
+        h('div', { className: 'ubic-valor' }, u.enDepositoPropio, h('span', null, ' u')),
+        h('div', { className: 'ubic-sub' },
+          seleccionado.stockFisicoBase ? ('Último conteo: ' + seleccionado.stockFisicoBase + ' u el ' + (seleccionado.fechaConteoBase || 'sin fecha')) : 'Contás vos una vez; el panel sigue solo con los Envíos.'),
+        u.recibidasTotal > 0 && h('div', { className: 'ubic-sub' },
+          'Según tus lotes deberían quedar ', h('b', null, u.depositoSugerido + ' u'), '. ',
+          h('button', { type: 'button', className: 'link-btn', onClick: () => setCampo(seleccionado.id, 'stockFisicoBase', u.depositoSugerido) }, 'Usar este número')),
+        u.faltaDespachoFull > 0 && h('div', { className: 'ubic-sub aviso-texto' },
+          'Faltan ' + u.faltaDespachoFull + ' u en "Unid. a FULL" del Historial de envíos.'),
+        conteoDeposito),
+      h('div', { className: 'ubic-card ubic-flex' },
+        h('div', { className: 'ubic-titulo' }, 'Stock Flex'),
+        h('div', { className: 'ubic-valor' }, u.flexStock, h('span', null, ' u')),
+        !u.flexActivo
+          ? h('div', { className: 'ubic-sub' }, 'Todavía no está activo. Cargá el primer conteo cuando el courier te confirme el ingreso.')
+          : h(React.Fragment, null,
+              h('div', { className: 'ubic-sub' },
+                seleccionado.flexConteo
+                  ? 'Último conteo: ' + seleccionado.flexConteo + ' u el ' + (seleccionado.flexFechaConteo || 'sin fecha')
+                  : 'Activo por movimientos cargados — todavía sin un conteo base. Cargá uno para que el número sea más confiable.'),
+              h('div', { className: 'ubic-sub' },
+                u.ritmoFlex > 0
+                  ? 'Vendés ' + (Math.round(u.ritmoFlex * 10) / 10) + ' u/día por Flex: alcanza para ' + u.flexAlcanzaDias + ' días.'
+                  : 'Todavía no hay ventas por Flex.'),
+              u.flexAReponer > 0 && h('div', { className: 'ubic-sub' }, h('b', null, 'Reponer ' + u.flexAReponer + ' u'), ' para tener ' + u.flexDiasCob + ' días.'),
+              u.flexDescuadre < 0 && h('div', { className: 'ubic-sub aviso-texto' },
+                'Las ventas Flex superan lo enviado en ' + Math.abs(u.flexDescuadre) + ' u: falta cargar un envío o el conteo del courier está desactualizado.')),
+        conteoFlex)),
+    h('div', { className: 'ubic-transito-row' },
+      h(FilaUbicacionSecundaria, { titulo: 'En tránsito (importación)', valor: u.ordenesEnTransito }),
+      h(FilaUbicacionSecundaria, { titulo: 'En camino a FULL', valor: u.enCaminoAFull }),
+      u.flexActivo && h(FilaUbicacionSecundaria, { titulo: 'En camino a Flex', valor: u.enCaminoAFlex })),
+    u.recibidasTotal > 0 && h('div', { className: 'sub-empty', style: { marginTop: 10 } },
+      h('b', null, 'Control: '), 'recibiste ' + u.recibidasTotal + ' u y vendiste ' + u.vendidoTotal +
+      ' u (' + u.vendidasFull + ' por FULL, ' + u.vendidasPropias + ' por envío propio' + (u.flexActivo ? ', ' + u.vendidasFlex + ' por Flex' : '') + '), así que deberían quedar ' + u.deberiaHaber +
+      ' u. Entre los lugares de arriba hay ' + u.hayContado + ' u. ' +
+      (u.descuadre === 0 ? 'Cuadra.' : (u.descuadre > 0 ? 'Sobran ' + u.descuadre + ' u — puede faltar cargar ventas o algún lote está contado de más.' : 'Faltan ' + Math.abs(u.descuadre) + ' u — puede faltar cargar un lote, o hubo roturas, muestras o pérdidas.'))));
 }
 
 // ---------- Stock: en tránsito (importación, reposición a FULL/Flex, devoluciones) ----------
@@ -4919,10 +5021,7 @@ function StockPanel({
     [['disponible', 'Stock disponible'], ['transito', 'Stock en tránsito']].map(([k, t]) => h('button', { key: k, type: 'button', className: 'stock-solapa' + (solapa === k ? ' stock-solapa-activa' : ''), onClick: () => setSolapa(k) }, t))),
   solapa === 'transito' ? h(TransitoStock, { p: seleccionado, r: rSeleccionado, updateEnvio, updateMovFlex, famSel }) : React.createElement(React.Fragment, null,
   
-  rSeleccionado && rSeleccionado.fullSupuestas > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "data-note", style: { marginTop: -4, marginBottom: 16 }
-  }, rSeleccionado.fullSupuestas + " unidades se despacharon a FULL hace más de " + DIAS_FULL_SIN_LLEGADA + " días y el envío no tiene fecha de llegada a FULL: se asumen ya recibidas (Mercado Libre ya las cuenta en el stock de FULL). Cargá la fecha real en el envío para quitar este aviso."),
-  rSeleccionado && h(TarjetasUbicacion, { seleccionado, r: rSeleccionado, famSel }),
+  h(UbicacionesStock, { seleccionado, famSel, setCampo }),
   rSeleccionado ? /*#__PURE__*/React.createElement("div", {
     className: "kpi-row"
   }, /*#__PURE__*/React.createElement("div", {
@@ -4957,7 +5056,8 @@ function StockPanel({
     const h = React.createElement;
     const d = famSel.detalle;
     const publicadoPropio = d.filter(x => !x.esFull).reduce((t, x) => t + x.publicado * x.factor, 0);
-    const deposito = rSeleccionado ? rSeleccionado.enDepositoPropio + (rSeleccionado.flexStock || 0) : 0;
+    const uFam = calcularUbicacionesStock(famSel.virtual);
+    const deposito = uFam.enDepositoPropio + (uFam.flexStock || 0);
     const totalEq = d.reduce((t, x) => t + x.equivalentes, 0);
     return h('div', { className: 'table-section' },
       h('div', { className: 'table-section-header' }, h('h2', null, 'SKU de la familia (mismo stock)')),
@@ -4972,7 +5072,7 @@ function StockPanel({
           h('td', null, x.equivalentes))),
           h('tr', { key: 'tot' }, h('td', null, h('b', null, 'Total')), h('td'), h('td'), h('td'), h('td'), h('td', null, h('b', null, totalEq)))))),
       h('div', { className: publicadoPropio > deposito ? 'data-note aviso-rojo' : 'sub-empty', style: { marginTop: 8 } },
-        'Stock que las publicaciones de despacho propio muestran en Mercado Libre: ' + publicadoPropio + ' collares equivalentes · en tu depósito' + (rSeleccionado && rSeleccionado.flexActivo ? ' + Flex' : '') + ': ' + deposito +
+        'Stock que las publicaciones de despacho propio muestran en Mercado Libre: ' + publicadoPropio + ' collares equivalentes · en tu depósito' + (uFam.flexActivo ? ' + Flex' : '') + ': ' + deposito +
         (publicadoPropio > deposito ? ' → las publicaciones muestran más de lo que hay: riesgo de sobreventa.' : ' → alcanza.')));
   })(),
   /*#__PURE__*/React.createElement("div", {
@@ -5198,29 +5298,9 @@ function StockPanel({
     style: {
       padding: '4px 2px'
     }
-  }, "Stock: FULL + tu depósito")), /*#__PURE__*/React.createElement("div", {
+  }, "Demanda comprometida")), /*#__PURE__*/React.createElement("div", {
     className: "costo-card-body stock-params-grid"
   }, /*#__PURE__*/React.createElement(CampoInput, {
-    label: "En FULL (lo informa Mercado Libre)",
-    prefix: null,
-    value: seleccionado.stockFull,
-    onChange: v => setCampo(seleccionado.id, 'stockFull', v)
-  }), /*#__PURE__*/React.createElement(CampoInput, {
-    label: "En tu depósito — unidades contadas a mano",
-    prefix: null,
-    value: seleccionado.stockFisicoBase,
-    onChange: v => setCampo(seleccionado.id, 'stockFisicoBase', v)
-  }), /*#__PURE__*/React.createElement("label", {
-    className: "calc-field"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "calc-field-label"
-  }, "Fecha de ese conteo"), /*#__PURE__*/React.createElement("div", {
-    className: "calc-field-input"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "date",
-    value: seleccionado.fechaConteoBase,
-    onChange: e => setCampo(seleccionado.id, 'fechaConteoBase', e.target.value)
-  }))), /*#__PURE__*/React.createElement(CampoInput, {
     label: "Demanda comprometida sin despachar",
     prefix: null,
     value: seleccionado.demandaComprometida,
@@ -5230,100 +5310,21 @@ function StockPanel({
     style: {
       marginTop: 12
     }
-  }, "El stock vive en tres lugares: tu depósito, en camino a FULL, y ya disponible en FULL. En FULL lo trae Mercado Libre al sincronizar. En tu depósito lo contás vos: es lo que te queda de los lotes recibidos y todavía no despachaste a FULL. Desde la fecha del conteo, el panel suma solo lo que llegó después (según Historial de envíos)."),
-  rSeleccionado && rSeleccionado.recibidasTotal > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "deposito-sugerido"
-  }, "Según tus lotes: recibiste " + rSeleccionado.recibidasTotal + " u, mandaste " +
-     rSeleccionado.despachadoAFullTotal + " u a FULL y despachaste vos mismo " +
-     rSeleccionado.vendidasPropias + " u vendidas por correo, así que en tu depósito deberían quedar ",
-  /*#__PURE__*/React.createElement("strong", null, rSeleccionado.depositoSugerido + " u"),
-  ". ",
-  /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    className: "link-btn",
-    onClick: () => setCampo(seleccionado.id, 'stockFisicoBase', rSeleccionado.depositoSugerido)
-  }, "Usar este número")),
-  rSeleccionado && rSeleccionado.faltaDespachoFull > 0 &&
-  /*#__PURE__*/React.createElement("div", { className: "control-desc" },
-    /*#__PURE__*/React.createElement("strong", null, "Faltan datos de despacho a FULL. "),
-    "Se vendieron " + rSeleccionado.vendidasFull + " u despachadas POR FULL, pero solo tenés registradas " +
-    rSeleccionado.despachadoAFullTotal + " u enviadas a FULL. Faltan al menos " +
-    rSeleccionado.faltaDespachoFull + " u en la columna \"Unid. a FULL\" del historial de envíos."),
-  rSeleccionado && rSeleccionado.recibidasTotal > 0 && /*#__PURE__*/React.createElement("div", {
-    className: rSeleccionado.descuadre === 0 ? "control-ok" : "control-desc"
-  }, /*#__PURE__*/React.createElement("strong", null, "Control: "),
-     "recibiste " + rSeleccionado.recibidasTotal + " u (lotes ya llegados) y vendiste " +
-     rSeleccionado.vendidoTotal + " u (" + rSeleccionado.vendidasFull + " por FULL y " +
-     rSeleccionado.vendidasPropias + " por envío propio), así que deberían quedar " +
-     rSeleccionado.deberiaHaber + " u. Entre los tres lugares hay " + rSeleccionado.hayContado + " u. ",
-  rSeleccionado.descuadre === 0
-    ? "Cuadra."
-    : (rSeleccionado.descuadre > 0
-        ? "Sobran " + rSeleccionado.descuadre + " u — puede faltar cargar ventas o algún lote está contado de más."
-        : "Faltan " + Math.abs(rSeleccionado.descuadre) + " u — puede faltar cargar un lote, o hubo roturas, muestras o pérdidas."),
-  /*#__PURE__*/React.createElement("div", { style: { marginTop: 6, opacity: .8 } },
-    "Para que cuadre, el historial de ventas tiene que cubrir toda la vida del producto. Si cargaste 6 meses y el primer lote es más viejo, el control va a marcar diferencia.")), rSeleccionado && /*#__PURE__*/React.createElement("div", {
-    className: "costo-out-grid",
-    style: {
-      marginTop: 14,
-      borderTop: '1px dashed var(--border-soft)',
-      paddingTop: 14
-    }
-  }, /*#__PURE__*/React.createElement(CampoCalculado, {
-    label: "1. En depósito JOPEX",
-    value: `${rSeleccionado.enDepositoPropio} u`,
-    highlight: true
-  }), rSeleccionado.flexActivo && /*#__PURE__*/React.createElement(CampoCalculado, {
-    label: "En Flex (depósito del courier)",
-    value: `${rSeleccionado.flexStock} u`,
-    highlight: true
-  }), /*#__PURE__*/React.createElement(CampoCalculado, {
-    label: "2. En camino a FULL",
-    value: `${rSeleccionado.enCaminoAFull} u`,
-    highlight: rSeleccionado.enCaminoAFull > 0
-  }), /*#__PURE__*/React.createElement(CampoCalculado, {
-    label: "3. En FULL (Mercado Libre)",
-    value: `${rSeleccionado.stockFull} u`,
-    highlight: true
-  }), /*#__PURE__*/React.createElement(CampoCalculado, {
-    label: "Vendidas por FULL",
-    value: `${rSeleccionado.vendidasFull} u`
-  }), rSeleccionado.flexActivo && /*#__PURE__*/React.createElement(CampoCalculado, {
-    label: "Vendidas por Flex",
-    value: `${rSeleccionado.vendidasFlex} u`
-  }), /*#__PURE__*/React.createElement(CampoCalculado, {
-    label: "Vendidas por envío propio",
-    value: `${rSeleccionado.vendidasPropias} u`
-  }), /*#__PURE__*/React.createElement(CampoCalculado, {
-    label: "Órdenes en tránsito (calculado)",
-    value: `${rSeleccionado.ordenesEnTransito} u`,
-    highlight: true
-  }))), h('div', { className: 'table-section' },
+  }, "Pedidos ya confirmados que todavía no despachaste — se restan del Total Disponible. FULL, Depósito propio y Flex se ven y se cargan arriba, en \"Dónde está tu stock\".")),
+  rSeleccionado && h('div', { className: 'sub-block' },
+    h('h3', null, 'Cómo se vendió (histórico)'),
+    h('div', { className: 'costo-out-grid', style: { gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' } },
+      h(CampoCalculado, { label: 'Vendidas por FULL', value: `${rSeleccionado.vendidasFull} u` }),
+      rSeleccionado.flexActivo && h(CampoCalculado, { label: 'Vendidas por Flex', value: `${rSeleccionado.vendidasFlex} u` }),
+      h(CampoCalculado, { label: 'Vendidas por envío propio', value: `${rSeleccionado.vendidasPropias} u` }))),
+  h('div', { className: 'table-section' },
     h('div', { className: 'table-section-header' },
       h('h2', null, 'Stock en Flex (depósito del courier)'),
       h('div', { style: { display: 'flex', gap: 8 } },
         h('button', { className: 'add-btn', type: 'button', onClick: () => addMovFlex(seleccionado.id, 'envio') }, h(Plus, { size: 16 }), 'Envío a Flex'),
         h('button', { className: 'add-btn', type: 'button', onClick: () => addMovFlex(seleccionado.id, 'devolucion') }, h(Plus, { size: 16 }), 'Devolución'))),
-    h('div', { className: 'calc-grid', style: { padding: '0 16px' } },
-      h(CampoInput, { label: 'Stock en Flex según el courier (último conteo)', prefix: null, value: seleccionado.flexConteo, onChange: v => setCampo(seleccionado.id, 'flexConteo', v) }),
-      h('label', { className: 'calc-field' },
-        h('span', { className: 'calc-field-label' }, 'Fecha de ese conteo'),
-        h('div', { className: 'calc-field-input' }, h('input', { type: 'date', value: seleccionado.flexFechaConteo || '', onChange: e => setCampo(seleccionado.id, 'flexFechaConteo', e.target.value) }))),
-      h(CampoInput, { label: 'Días de venta a tener en Flex', prefix: null, value: seleccionado.flexDiasCobertura, onChange: v => setCampo(seleccionado.id, 'flexDiasCobertura', v) })),
-    rSeleccionado && rSeleccionado.flexActivo
-      ? h('div', { className: 'deposito-sugerido', style: { margin: '12px 16px 0' } },
-          'En Flex hay ', h('strong', null, rSeleccionado.flexStock + ' u'),
-          ' (conteo + envíos − devoluciones − ventas Flex). ',
-          rSeleccionado.ritmoFlex > 0
-            ? 'Vendés ' + (Math.round(rSeleccionado.ritmoFlex * 10) / 10) + ' u/día por Flex: te alcanza para ' + rSeleccionado.flexAlcanzaDias + ' días. '
-            : 'Todavía no hay ventas por Flex. ',
-          rSeleccionado.flexAReponer > 0
-            ? h('strong', null, 'Reponer ' + rSeleccionado.flexAReponer + ' u para tener ' + rSeleccionado.flexDiasCob + ' días' + (rSeleccionado.flexAReponer > rSeleccionado.enDepositoPropio ? ' (en tu depósito solo hay ' + rSeleccionado.enDepositoPropio + ')' : '') + '.')
-            : 'No hace falta reponer.')
-      : h('div', { className: 'sub-empty', style: { margin: '12px 16px 0' } },
-          'Flex todavía no está activo. Cuando el courier te confirme el primer ingreso, cargá el envío con el botón "Envío a Flex": las unidades salen de tu depósito y las ventas Flex se descuentan solas.'),
-    rSeleccionado && rSeleccionado.flexDescuadre < 0 && h('div', { className: 'data-note aviso-rojo', style: { margin: '8px 16px 0' } },
-      'Las ventas Flex superan lo enviado en ' + Math.abs(rSeleccionado.flexDescuadre) + ' u: falta cargar un envío o el conteo del courier está desactualizado.'),
+    h('div', { className: 'sub-empty', style: { margin: '0 16px 12px' } },
+      'El conteo y la fecha se cargan arriba, en "Dónde está tu stock" → tarjeta Stock Flex. Acá abajo va cada envío y devolución, uno por uno.'),
     h('div', { className: 'table-scroll' },
       h('table', null,
         h('thead', null, h('tr', null, h('th', null, 'Fecha'), h('th', null, 'Tipo'), h('th', null, 'Unidades'), h('th', null, 'Estado'), h('th', null, 'Nota'), h('th', null))),
@@ -8539,9 +8540,17 @@ function JopexPanel() {
         .ubic-full { border-color: rgba(61, 220, 60, 0.55); color: #3ddc3c; }
         .ubic-flex { border-color: rgba(245, 197, 66, 0.6); color: #f5c542; }
         .ubic-rp { border-color: rgba(74, 168, 255, 0.6); color: #4aa8ff; }
+        .ubic-auto { opacity: 0.85; }
+        .ubic-sub.aviso-texto { color: #ff8a8a; }
+        .ubic-card .ubic-conteo-btn { margin-top: 10px; width: 100%; justify-content: center; font-size: 12.5px; padding: 7px 10px; }
+        .ubic-conteo-form { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px dashed var(--border-soft, rgba(255,255,255,0.12)); }
+        .ubic-conteo-form .link-btn { align-self: flex-end; }
+        .ubic-transito-row { display: flex; gap: 18px; flex-wrap: wrap; margin: -4px 0 16px; padding: 10px 14px; border-radius: 10px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-soft, rgba(255,255,255,0.08)); }
+        .ubic-sec-fila { display: flex; gap: 6px; align-items: baseline; font-size: 12.5px; color: var(--text-secondary, #9aa4b2); }
+        .ubic-sec-valor { color: var(--text-primary, #fff); font-weight: 700; }
         .stock-datos { margin-top: 22px; }
         .stock-datos > summary { cursor: pointer; font-weight: 600; padding: 10px 0; color: var(--text-secondary, #9aa4b2); }
-        @media (max-width: 700px) { .ubic-row { grid-template-columns: 1fr; } }
+        @media (max-width: 700px) { .ubic-row { grid-template-columns: 1fr; } .ubic-transito-row { gap: 10px 18px; } }
         .stock-resumen-list {
           display: flex;
           flex-direction: column;
