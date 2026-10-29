@@ -4160,8 +4160,13 @@ function calcularUbicacionesStock(p) {
   return {
     stockFull,
     enDepositoPropio,
+    llegadasDespuesDelConteo,
+    salidasAFlexDesdeConteo,
     flexActivo,
     flexStock,
+    flexBase,
+    movFlexNeto,
+    ventasFlexDesde,
     enCaminoAFlex,
     flexDescuadre,
     flexDesde,
@@ -4458,6 +4463,20 @@ function FilaUbicacionSecundaria({ titulo, valor }) {
     h('span', { className: 'ubic-sec-titulo' }, titulo),
     h('span', { className: 'ubic-sec-valor' }, valor, ' u'));
 }
+// Explica de dónde sale el número grande cuando no coincide con el último conteo:
+// "9 u contadas + 165 u que llegaron − 50 u que salieron = 124 u". Si no hubo
+// movimiento desde el conteo (todos los términos en 0), no hace falta mostrarla:
+// el número grande ya es igual al conteo y no hay nada que explicar.
+function CuentaDesdeConteo({ base, terminos, total }) {
+  const h = React.createElement;
+  const conMovimiento = terminos.some(t => t.valor !== 0);
+  if (!conMovimiento) return null;
+  return h('div', { className: 'ubic-sub ubic-cuenta' },
+    base + ' u contadas',
+    terminos.map((t, i) => t.valor === 0 ? null : h(React.Fragment, { key: i },
+      ' ', t.valor > 0 ? '+' : '−', ' ', Math.abs(t.valor) + ' u ' + t.etiqueta)),
+    ' = ', h('b', null, total + ' u'));
+}
 // ---------- Dónde está el stock, con los tres lugares explicados igual que se cargan ----------
 // FULL es el único 100% automático (lo trae "Sincronizar con Mercado Libre", sin ningún campo
 // para pisarlo a mano). Depósito propio y Flex son manuales pero IGUALES entre sí: un conteo
@@ -4512,6 +4531,14 @@ function UbicacionesStock({ seleccionado, famSel, setCampo }) {
         h('div', { className: 'ubic-valor' }, u.enDepositoPropio, h('span', null, ' u')),
         h('div', { className: 'ubic-sub' },
           seleccionado.stockFisicoBase ? ('Último conteo: ' + seleccionado.stockFisicoBase + ' u el ' + (seleccionado.fechaConteoBase || 'sin fecha')) : 'Contás vos una vez; el panel sigue solo con los Envíos.'),
+        seleccionado.stockFisicoBase && h(CuentaDesdeConteo, {
+          base: seleccionado.stockFisicoBase,
+          terminos: [
+            { valor: u.llegadasDespuesDelConteo, etiqueta: 'que llegaron después' },
+            { valor: -u.salidasAFlexDesdeConteo, etiqueta: 'que salieron después' }
+          ],
+          total: u.enDepositoPropio
+        }),
         u.recibidasTotal > 0 && h('div', { className: 'ubic-sub' },
           'Según tus lotes deberían quedar ', h('b', null, u.depositoSugerido + ' u'), '. ',
           h('button', { type: 'button', className: 'link-btn', onClick: () => setCampo(seleccionado.id, 'stockFisicoBase', u.depositoSugerido) }, 'Usar este número')),
@@ -4528,6 +4555,14 @@ function UbicacionesStock({ seleccionado, famSel, setCampo }) {
                 seleccionado.flexConteo
                   ? 'Último conteo: ' + seleccionado.flexConteo + ' u el ' + (seleccionado.flexFechaConteo || 'sin fecha')
                   : 'Activo por movimientos cargados — todavía sin un conteo base. Cargá uno para que el número sea más confiable.'),
+              seleccionado.flexConteo && h(CuentaDesdeConteo, {
+                base: seleccionado.flexConteo,
+                terminos: [
+                  { valor: u.movFlexNeto, etiqueta: 'de envíos y devoluciones' },
+                  { valor: -u.ventasFlexDesde, etiqueta: 'vendidas' }
+                ],
+                total: u.flexStock
+              }),
               h('div', { className: 'ubic-sub' },
                 u.ritmoFlex > 0
                   ? 'Vendés ' + (Math.round(u.ritmoFlex * 10) / 10) + ' u/día por Flex: alcanza para ' + u.flexAlcanzaDias + ' días.'
@@ -8537,6 +8572,7 @@ function JopexPanel() {
         .ubic-valor { font-size: 38px; font-weight: 700; line-height: 1.15; margin: 4px 0; }
         .ubic-valor span { font-size: 16px; font-weight: 500; opacity: 0.7; }
         .ubic-sub { font-size: 12px; opacity: 0.8; min-height: 16px; }
+        .ubic-cuenta { font-family: var(--mono-font, 'Courier New', monospace); font-size: 11.5px; opacity: 0.7; }
         .ubic-full { border-color: rgba(61, 220, 60, 0.55); color: #3ddc3c; }
         .ubic-flex { border-color: rgba(245, 197, 66, 0.6); color: #f5c542; }
         .ubic-rp { border-color: rgba(74, 168, 255, 0.6); color: #4aa8ff; }
