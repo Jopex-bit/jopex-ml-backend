@@ -330,13 +330,13 @@ module.exports = (app) => {
       ]);
 
       // ---- Visitas (para la conversión) ----
-      // ML rechaza (400) un date_to en el futuro: el día de hoy se corta en "ahora".
-      // Se prueban dos formatos de fecha porque la API no siempre acepta el mismo.
+      // items_visits acepta fechas simples (YYYY-MM-DD); con hora y zona devuelve
+      // 400 "unknown date format" (verificado el 28/10/2026). El formato largo queda de respaldo.
       const visitas = async (d, h) => {
         const fin = h === hoy ? new Date().toISOString().slice(0, 19) + '.000-00:00' : `${h}T23:59:59.000-03:00`;
         const formatos = [
-          { date_from: `${d}T00:00:00.000-03:00`, date_to: fin },
           { date_from: d, date_to: h },
+          { date_from: `${d}T00:00:00.000-03:00`, date_to: fin },
         ];
         for (const params of formatos) {
           try {
