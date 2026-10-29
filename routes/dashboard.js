@@ -330,17 +330,24 @@ module.exports = (app) => {
       ]);
 
       // ---- Visitas (para la conversión) ----
+      // ML rechaza (400) un date_to en el futuro: el día de hoy se corta en "ahora".
+      // Se prueban dos formatos de fecha porque la API no siempre acepta el mismo.
       const visitas = async (d, h) => {
-        try {
-          const r = await axios.get(`${ctx.API}/users/${ctx.uid}/items_visits`, {
-            ...ctx.auth, timeout: 15000,
-            params: { date_from: `${d}T00:00:00.000-03:00`, date_to: `${h}T23:59:59.999-03:00` },
-          });
-          return r.data && r.data.total_visits != null ? Number(r.data.total_visits) : null;
-        } catch (e) {
-          diagnostico.push({ paso: 'visitas ' + d + '→' + h, status: e.response ? e.response.status : null, detalle: e.message });
-          return null;
+        const fin = h === hoy ? new Date().toISOString().slice(0, 19) + '.000-00:00' : `${h}T23:59:59.000-03:00`;
+        const formatos = [
+          { date_from: `${d}T00:00:00.000-03:00`, date_to: fin },
+          { date_from: d, date_to: h },
+        ];
+        for (const params of formatos) {
+          try {
+            const r = await axios.get(`${ctx.API}/users/${ctx.uid}/items_visits`, { ...ctx.auth, timeout: 15000, params });
+            if (r.data && r.data.total_visits != null) return Number(r.data.total_visits);
+          } catch (e) {
+            diagnostico.push({ paso: 'visitas ' + d + '→' + h + ' (' + params.date_from + ')', status: e.response ? e.response.status : null,
+              detalle: (e.response && e.response.data && (e.response.data.message || e.response.data.error)) || e.message });
+          }
         }
+        return null;
       };
       const [visPeriodo, visAnterior] = await Promise.all([visitas(desde, hasta), visitas(antDesde, antHasta)]);
 
