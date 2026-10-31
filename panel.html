@@ -6372,7 +6372,10 @@ function calcRapidaVacio() {
     valorUnitUsd: '',
     tasaDie: '',
     envioUsd: '',
-    comisionAlibabaUsd: ''
+    comisionAlibabaUsd: '',
+    // true = valor por defecto: así los que ya usaban la calculadora (siempre
+    // asumía importado) ven exactamente lo mismo que antes al abrirla de nuevo.
+    esImportado: true
   };
 }
 
@@ -6398,8 +6401,11 @@ function calcRapidaPrecioVacio() {
     envioML: '',
     cuotas: '6',
     mgUtilidad: '',
+    mgMinimo: '',
     unidadesPack: '1',
-    precioManual: ''
+    precioManual: '',
+    // Costo del producto cuando NO es importado (en vez del costo landed).
+    costoDirecto: ''
   };
 }
 
@@ -6510,11 +6516,17 @@ function CalculadoraRapidaPanel() {
   };
 
   // Unidades que lleva la publicación (1 = unidad suelta; 2, 3... = pack). El costo del producto
-  // es el landed unitario por esa cantidad; el resto de la cascada (comisión, cuotas, margen) se
-  // calcula sobre el precio del pack completo.
+  // es el costo unitario (landed, o el que cargaste directo si no es importado) por esa cantidad;
+  // el resto de la cascada (comisión, cuotas, margen) se calcula sobre el precio del pack completo.
   const packN = Math.max(1, Math.floor(Number(fp.unidadesPack)) || 1);
-  const rp = (r && !r.error) ? calcularCosto({
-    valorAdquisicion: r.precioLandedArs * packN,
+  // Costo unitario del producto: si es importado, el landed de arriba (r.precioLandedArs); si no,
+  // el que se carga directo acá abajo. De las dos formas, es "cuánto me cuesta UNA pieza" — el resto
+  // de la cascada es igual para los dos casos.
+  const costoUnitarioArs = f.esImportado
+    ? (r && !r.error ? r.precioLandedArs : null)
+    : (fp.costoDirecto !== '' && Number(fp.costoDirecto) > 0 ? Number(fp.costoDirecto) : null);
+  const rp = (costoUnitarioArs != null) ? calcularCosto({
+    valorAdquisicion: costoUnitarioArs * packN,
     envioML: fp.envioML,
     cargoVenta: fp.cargoVenta,
     cuotas: fp.cuotas,
@@ -6539,6 +6551,9 @@ function CalculadoraRapidaPanel() {
     const margen = deposito - costo;
     man = { fijo, comVar, fin, envio, costo, deposito, margen, margenPct: margen / pm * 100 };
   }
+  // Mismo aviso que en Costos: rojo si el margen con este precio manual da negativo, amarillo si da
+  // positivo pero por debajo del "% Mg. mínimo aceptable" (vacío = la mitad del deseado).
+  const nvManual = man ? nivelMargen(man.margenPct, { mgUtilidad: fp.mgUtilidad, mgMinimo: fp.mgMinimo }) : null;
   const tarjetaManual = h('div', { className: 'calc-manual-card' },
     h('h4', null, 'Precio manual (redondeado)'),
     h('p', { className: 'lineas-hint' }, 'Poné el precio que querés publicar (por ejemplo el sugerido redondeado) y mirá cuánto te queda realmente.'),
@@ -6547,12 +6562,13 @@ function CalculadoraRapidaPanel() {
       h('button', { type: 'button', className: 'add-btn ghost-btn', onClick: () => setP('precioManual', String(Math.ceil(rp.precio))) }, 'Usar el sugerido')),
     !man && h('div', { className: 'sub-empty' }, 'Ingresá un precio para ver el desglose.'),
     man && h(React.Fragment, null,
+      nvManual && h(AvisoMargenMinimo, { lineas: [{ nivel: nvManual.nivel, cond: '', precio: pm, margenPct: man.margenPct, minimo: nvManual.minimo }] }),
       h('div', { className: 'costo-out-grid' },
         h(CampoCalculado, { label: 'Comisión variable (' + (Number(fp.cargoVenta) || 0) + '%)', value: money(man.comVar) }),
         h(CampoCalculado, { label: man.fijo > 0 ? 'Cargo fijo por venta' : 'Cargo fijo (no aplica)', value: man.fijo > 0 ? money(man.fijo) : '$0', highlight: man.fijo > 0 }),
         h(CampoCalculado, { label: 'Financiamiento (' + (fp.cuotas === 'sin' ? 'sin cuotas' : fp.cuotas + ' cuotas') + ')', value: money(man.fin) }),
         h(CampoCalculado, { label: packN > 1 ? 'Envío del pack' : 'Envío al cliente', value: money(man.envio) }),
-        h(CampoCalculado, { label: packN > 1 ? 'Costo del producto (landed × ' + packN + ')' : 'Costo del producto (landed)', value: money(man.costo) }),
+        h(CampoCalculado, { label: packN > 1 ? 'Costo del producto (× ' + packN + ')' : 'Costo del producto', value: money(man.costo) }),
         h(CampoCalculado, { label: 'Depósito de Mercado Libre', value: money(man.deposito), highlight: true }),
         h(CampoCalculado, { label: 'Margen real (%)', value: pct(man.margenPct), highlight: true, danger: man.margen <= 0 }),
         h(CampoCalculado, { label: 'Margen real ($)', value: money(man.margen), highlight: true, danger: man.margen <= 0 }),
@@ -6567,38 +6583,85 @@ function CalculadoraRapidaPanel() {
       Math.abs(pm - rp.precio) / rp.precio > 0.3 && h('div', { className: 'data-note', style: { marginBottom: 0 } },
         'Ojo: este precio está lejos del sugerido (' + money(rp.precio) + '). Revisá que no sea un error de tipeo.')));
 
+  // ---------- Tarjeta 3: a qué costo tenés que conseguirlo ----------
+  // La pregunta inversa a la de arriba: en vez de "con este costo, ¿a qué precio vendo?", acá es
+  // "si quiero vender al precio manual de arriba y ganar el margen que pedí, ¿cuánto puedo pagar
+  // como máximo por el producto?". Usa los MISMOS campos (cargo%, cuotas, envío, margen deseado,
+  // precio manual) — no hace falta volver a cargar nada: es la misma cuenta despejada al revés.
+  // No hace falta iterar el tramo de cargo fijo como en calcularCosto: acá el precio ya es un dato
+  // conocido (el manual), así que el tramo sale directo con cargoFijoDe(precio).
+  const mgPctObjetivo = Number(fp.mgUtilidad);
+  const hayMgObjetivo = fp.mgUtilidad !== '' && !isNaN(mgPctObjetivo);
+  let costoNec = null;
+  if (hayPm && hayMgObjetivo) {
+    const cargoPct = Number(fp.cargoVenta) || 0;
+    const finPct = fp.cuotas === 'sin' ? 0 : (Number(tasasCuotas[fp.cuotas]) || 0);
+    const envio = Number(fp.envioML) || 0;
+    const fijo = cargoFijoDe(pm);
+    const comVar = pm * cargoPct / 100;
+    const fin = pm * finPct / 100;
+    const margenObjetivo = pm * mgPctObjetivo / 100;
+    const costoPackMax = pm - comVar - fijo - fin - envio - margenObjetivo;
+    costoNec = { fijo, comVar, fin, envio, margenObjetivo, costoPackMax, costoUnitMax: costoPackMax / packN };
+  }
+  const tarjetaCostoNecesario = h('div', { className: 'calc-manual-card' },
+    h('h4', null, 'A qué costo tenés que conseguirlo'),
+    h('p', { className: 'lineas-hint' }, 'Con el precio manual de arriba y el margen que pediste, cuánto podés pagar como máximo por el producto.'),
+    !hayPm && h('div', { className: 'sub-empty' }, 'Cargá un "Precio manual" arriba para calcular esto.'),
+    hayPm && !hayMgObjetivo && h('div', { className: 'sub-empty' }, 'Cargá "% Mg. de Utilidad deseado" arriba para calcular esto.'),
+    costoNec && (costoNec.costoPackMax <= 0
+      ? h('div', { className: 'data-note', style: { marginBottom: 0 } },
+          'Con este precio y este margen no hay costo posible — ni regalado alcanza. Bajá el margen pedido o subí el precio manual.')
+      : h(React.Fragment, null,
+          h('div', { className: 'precio-hero' }, money(costoNec.costoUnitMax), packN > 1 ? h('span', null, ' / unidad') : null),
+          packN > 1 && h('div', { className: 'tramo-nota' }, 'Costo del pack completo (' + packN + ' u): ' + money(costoNec.costoPackMax) + '.'),
+          h('div', { className: 'costo-out-grid' },
+            h(CampoCalculado, { label: 'Comisión variable (' + (Number(fp.cargoVenta) || 0) + '%)', value: money(costoNec.comVar) }),
+            h(CampoCalculado, { label: costoNec.fijo > 0 ? 'Cargo fijo por venta' : 'Cargo fijo (no aplica)', value: costoNec.fijo > 0 ? money(costoNec.fijo) : '$0', highlight: costoNec.fijo > 0 }),
+            h(CampoCalculado, { label: 'Financiamiento (' + (fp.cuotas === 'sin' ? 'sin cuotas' : fp.cuotas + ' cuotas') + ')', value: money(costoNec.fin) }),
+            h(CampoCalculado, { label: packN > 1 ? 'Envío del pack' : 'Envío al cliente', value: money(costoNec.envio) }),
+            h(CampoCalculado, { label: 'Margen que te queda (' + pct(mgPctObjetivo) + ')', value: money(costoNec.margenObjetivo), highlight: true })),
+          h('div', { className: 'muted hoy-nota' },
+            'Es el costo MÁXIMO para llegar justo al margen que pediste arriba. Si lo conseguís más barato, ganás más.'))));
+
+  const puedeCalcularPrecio = f.esImportado ? (r && !r.error) : (costoUnitarioArs != null);
+
   return h('div', { className: 'module-panel' },
     h('div', { className: 'module-header' },
       h('h1', null, 'Calculadora de Costo Rápido'),
       h('p', null, MODULE_DESC.calculadora)),
 
-    h('div', { className: 'tc-bar' },
-      h('span', { className: 'calc-field-label' }, 'Tipo de cambio — USDT Belo'),
-      h(TcInput, { valor: tc, onCommit: v => guardarTc(v, 'cargado a mano') }),
-      h('button', { type: 'button', className: 'add-btn', onClick: refrescarTc }, '⟳ Refrescar'),
-      h('span', { className: 'tc-fuente' },
-        tcError || (tcFuente ? 'Última actualización: ' + tcFuente + ' (criptoya.com, Belo — compra).' : 'Todavía no se cargó el TC.'))),
+    h('div', { className: 'stock-solapas' },
+      h('button', { type: 'button', className: 'stock-solapa' + (f.esImportado ? ' stock-solapa-activa' : ''), onClick: () => set('esImportado', true) }, 'Es importado'),
+      h('button', { type: 'button', className: 'stock-solapa' + (!f.esImportado ? ' stock-solapa-activa' : ''), onClick: () => set('esImportado', false) }, 'Ya tengo el costo')),
 
-    h('div', { className: 'data-note' },
-      'Misma cascada que Investigación (Seguro 1%, Derecho por % Tasa DIE, Tasa Estadística 3%, IVA 21%), pero suelta: para estimar rápido el costo landed de un producto candidato. No se guarda como cotización ni se manda a Costos.'),
+    f.esImportado ? h(React.Fragment, null,
+      h('div', { className: 'tc-bar' },
+        h('span', { className: 'calc-field-label' }, 'Tipo de cambio — USDT Belo'),
+        h(TcInput, { valor: tc, onCommit: v => guardarTc(v, 'cargado a mano') }),
+        h('button', { type: 'button', className: 'add-btn', onClick: refrescarTc }, '⟳ Refrescar'),
+        h('span', { className: 'tc-fuente' },
+          tcError || (tcFuente ? 'Última actualización: ' + tcFuente + ' (criptoya.com, Belo — compra).' : 'Todavía no se cargó el TC.'))),
 
-    h('div', { className: 'cotiz-fields-grid' },
-      h(CampoInput, { label: 'Cantidad', value: f.cantidad, onChange: v => set('cantidad', v) }),
-      h(CampoInput, { label: 'US$ total del lote', prefix: 'US$', value: f.valorUsd, onChange: v => set('valorUsd', v) }),
-      h(CampoInput, { label: 'US$ por unidad', prefix: 'US$', value: f.valorUnitUsd, onChange: v => set('valorUnitUsd', v) }),
-      h(CampoInput, { label: '% Tasa DIE (derecho de importación)', prefix: '%', value: f.tasaDie, onChange: v => set('tasaDie', v) }),
-      h(CampoInput, { label: 'Envío total', prefix: 'US$', value: f.envioUsd, onChange: v => set('envioUsd', v) }),
-      h(CampoInput, { label: 'Comisión Alibaba', prefix: 'US$', value: f.comisionAlibabaUsd, onChange: v => set('comisionAlibabaUsd', v) })),
+      h('div', { className: 'data-note' },
+        'Misma cascada que Investigación (Seguro 1%, Derecho por % Tasa DIE, Tasa Estadística 3%, IVA 21%), pero suelta: para estimar rápido el costo landed de un producto candidato. No se guarda como cotización ni se manda a Costos.'),
 
-    h('div', { className: 'lineas-head' },
-      h('span'),
-      h('button', { type: 'button', className: 'add-btn ghost-btn', onClick: limpiar }, 'Limpiar')),
+      h('div', { className: 'cotiz-fields-grid' },
+        h(CampoInput, { label: 'Cantidad', value: f.cantidad, onChange: v => set('cantidad', v) }),
+        h(CampoInput, { label: 'US$ total del lote', prefix: 'US$', value: f.valorUsd, onChange: v => set('valorUsd', v) }),
+        h(CampoInput, { label: 'US$ por unidad', prefix: 'US$', value: f.valorUnitUsd, onChange: v => set('valorUnitUsd', v) }),
+        h(CampoInput, { label: '% Tasa DIE (derecho de importación)', prefix: '%', value: f.tasaDie, onChange: v => set('tasaDie', v) }),
+        h(CampoInput, { label: 'Envío total', prefix: 'US$', value: f.envioUsd, onChange: v => set('envioUsd', v) }),
+        h(CampoInput, { label: 'Comisión Alibaba', prefix: 'US$', value: f.comisionAlibabaUsd, onChange: v => set('comisionAlibabaUsd', v) })),
 
-    !r && h('div', { className: 'sub-empty' },
-      'Completá Cantidad, valor (total o por unidad), % Tasa DIE y Envío, y asegurate de tener el tipo de cambio cargado arriba, para calcular.'),
+      h('div', { className: 'lineas-head' },
+        h('span'),
+        h('button', { type: 'button', className: 'add-btn ghost-btn', onClick: limpiar }, 'Limpiar')),
 
-    r && h('div', { className: 'cotiz-resultado' },
-      h('div', { className: 'costo-out-grid' },
+      !r && h('div', { className: 'sub-empty' },
+        'Completá Cantidad, valor (total o por unidad), % Tasa DIE y Envío, y asegurate de tener el tipo de cambio cargado arriba, para calcular.'),
+
+      r && h('div', { className: 'costo-out-grid' },
         h(CampoCalculado, { label: 'Seguro (1%)', value: moneyUsd(r.seguro) }),
         h(CampoCalculado, { label: 'Base CIF', value: moneyUsd(r.cifTotal) }),
         h(CampoCalculado, { label: 'Derechos', value: moneyUsd(r.derecho) }),
@@ -6607,85 +6670,98 @@ function CalculadoraRapidaPanel() {
         h(CampoCalculado, { label: 'Total USD', value: moneyUsd(r.totalUsd), highlight: true }),
         h(CampoCalculado, { label: 'Unitario USD', value: moneyUsd(r.precioUnitUsd), highlight: true }),
         h(CampoCalculado, { label: 'Unidades', value: String(r.unidades) })),
-      h('div', { className: 'precio-hero cotiz-precio-landed' },
-        money(r.precioLandedArs), ' ', h('span', null, '/ unidad landed')),
+      r && !r.error && h('div', { className: 'precio-hero cotiz-precio-landed' },
+        money(r.precioLandedArs), ' ', h('span', null, '/ unidad landed')))
 
-      h('div', { className: 'module-header', style: { marginTop: 28 } },
-        h('h1', { style: { fontSize: 18 } }, 'Precio de venta sugerido en Mercado Libre')),
-      h('div', { className: 'data-note' },
-        'Usa el costo landed de arriba como "Valor de Adquisición" y aplica la misma cascada que Costos (comisión + cuotas + margen). La comisión por categoría se releva a mano en el simulador oficial de ML — si no está tu categoría, elegí "Otra" y cargala vos.'),
+    : h('div', { className: 'cotiz-fields-grid' },
+        h(CampoInput, { label: 'Costo del producto (por unidad)', prefix: '$', value: fp.costoDirecto, onChange: v => setP('costoDirecto', v) })),
 
-      h('div', { className: 'cotiz-fields-grid' },
-        h('label', { className: 'calc-field' },
-          h('span', { className: 'calc-field-label' }, 'Categoría (comisión de referencia)'),
-          h('div', { className: 'calc-field-input' },
-            h('select', {
-              value: fp.categoria,
-              onChange: e => elegirCategoria(e.target.value)
-            },
-              h('option', { value: '' }, 'Otra (cargo el % a mano)'),
-              COMISIONES_ML_CATEGORIAS.map(c =>
-                h('option', { key: c.id, value: c.id }, c.label + ' — ' + c.comision + '%'))))),
-        h(CampoInput, {
-          label: 'Unidades en la publicación (1 = suelta, 2 o 3 = pack)',
-          value: fp.unidadesPack, onChange: v => setP('unidadesPack', v)
+    h('div', { className: 'module-header', style: { marginTop: 28 } },
+      h('h1', { style: { fontSize: 18 } }, 'Precio de venta sugerido en Mercado Libre')),
+    h('div', { className: 'data-note' },
+      (f.esImportado ? 'Usa el costo landed de arriba' : 'Usa el costo que cargaste arriba') +
+      ' como "Valor de Adquisición" y aplica la misma cascada que Costos (comisión + cuotas + margen). La comisión por categoría se releva a mano en el simulador oficial de ML — si no está tu categoría, elegí "Otra" y cargala vos.'),
+
+    h('div', { className: 'cotiz-fields-grid' },
+      h('label', { className: 'calc-field' },
+        h('span', { className: 'calc-field-label' }, 'Categoría (comisión de referencia)'),
+        h('div', { className: 'calc-field-input' },
+          h('select', {
+            value: fp.categoria,
+            onChange: e => elegirCategoria(e.target.value)
+          },
+            h('option', { value: '' }, 'Otra (cargo el % a mano)'),
+            COMISIONES_ML_CATEGORIAS.map(c =>
+              h('option', { key: c.id, value: c.id }, c.label + ' — ' + c.comision + '%'))))),
+      h(CampoInput, {
+        label: 'Unidades en la publicación (1 = suelta, 2 o 3 = pack)',
+        value: fp.unidadesPack, onChange: v => setP('unidadesPack', v)
+      }),
+      h(CampoInput, {
+        label: '% Cargo por venta', prefix: '%',
+        value: fp.cargoVenta, onChange: v => setP('cargoVenta', v)
+      }),
+      h(CampoInput, {
+        label: packN > 1 ? 'Costo Envío ML del pack (al vender)' : 'Costo Envío ML (al vender)', prefix: '$',
+        value: fp.envioML, onChange: v => setP('envioML', v)
+      }),
+      h('label', { className: 'calc-field' },
+        h('span', { className: 'calc-field-label' }, 'Cuotas'),
+        h('div', { className: 'calc-field-input' },
+          h('select', {
+            value: fp.cuotas || '6',
+            onChange: e => setP('cuotas', e.target.value)
+          },
+            h('option', { value: 'sin' }, 'Sin cuotas (1 pago)'),
+            Object.keys(tasasCuotas).map(c =>
+              h('option', { key: c, value: c }, c + ' cuotas'))))),
+      h(CampoInput, {
+        label: '% Mg. de Utilidad deseado', prefix: '%',
+        value: fp.mgUtilidad, onChange: v => setP('mgUtilidad', v)
+      }),
+      h(CampoInput, {
+        label: '% Mg. mínimo aceptable (vacío = la mitad del deseado: ' + pct(margenMinimoDe({ mgUtilidad: fp.mgUtilidad })) + ')', prefix: '%',
+        value: fp.mgMinimo, onChange: v => setP('mgMinimo', v)
+      })),
+
+    !puedeCalcularPrecio && h('div', { className: 'sub-empty' },
+      f.esImportado
+        ? 'Completá el costo landed de arriba para calcular el precio sugerido.'
+        : 'Cargá el "Costo del producto" de arriba para calcular el precio sugerido.'),
+
+    puedeCalcularPrecio && !rp && h('div', { className: 'sub-empty' },
+      'Completá % Cargo por venta, Costo Envío ML y % Margen para calcular el precio sugerido.'),
+
+    rp && rp.error && h('div', { className: 'data-note', style: { marginBottom: 0 } }, rp.error),
+
+    rp && !rp.error && h('div', { className: 'calc-dos-col' },
+    h('div', { className: 'calc-col-sugerido' }, h(React.Fragment, null,
+      h('div', { className: 'precio-hero' }, money(rp.precio)),
+      h('div', { className: 'tramo-nota' },
+        rp.cargoFijo > 0
+          ? 'Tramo con cargo fijo: a ' + money(rp.precio) + ' Mercado Libre suma ' + money(rp.cargoFijo) +
+            ' por unidad además del ' + fp.cargoVenta + '% de comisión.'
+          : 'Sin cargo fijo: arriba de ' + money(33000) + ' Mercado Libre solo cobra el ' + fp.cargoVenta + '% de comisión.'),
+      rp.avisoSalto && h('div', { className: 'aviso-salto' }, rp.avisoSalto),
+      h('div', { className: 'costo-out-grid' },
+        h(CampoCalculado, { label: 'Comisión variable (' + fp.cargoVenta + '%)', value: money(rp.comisionML - rp.cargoFijo) }),
+        h(CampoCalculado, {
+          label: rp.cargoFijo > 0 ? 'Cargo fijo por unidad' : 'Cargo fijo (no aplica)',
+          value: rp.cargoFijo > 0 ? money(rp.cargoFijo) : '$0',
+          highlight: rp.cargoFijo > 0
         }),
-        h(CampoInput, {
-          label: '% Cargo por venta', prefix: '%',
-          value: fp.cargoVenta, onChange: v => setP('cargoVenta', v)
-        }),
-        h(CampoInput, {
-          label: packN > 1 ? 'Costo Envío ML del pack (al vender)' : 'Costo Envío ML (al vender)', prefix: '$',
-          value: fp.envioML, onChange: v => setP('envioML', v)
-        }),
-        h('label', { className: 'calc-field' },
-          h('span', { className: 'calc-field-label' }, 'Cuotas'),
-          h('div', { className: 'calc-field-input' },
-            h('select', {
-              value: fp.cuotas || '6',
-              onChange: e => setP('cuotas', e.target.value)
-            },
-              h('option', { value: 'sin' }, 'Sin cuotas (1 pago)'),
-              Object.keys(tasasCuotas).map(c =>
-                h('option', { key: c, value: c }, c + ' cuotas'))))),
-        h(CampoInput, {
-          label: '% Mg. de Utilidad deseado', prefix: '%',
-          value: fp.mgUtilidad, onChange: v => setP('mgUtilidad', v)
-        })),
-
-      !rp && h('div', { className: 'sub-empty' },
-        'Completá % Cargo por venta, Costo Envío ML y % Margen para calcular el precio sugerido.'),
-
-      rp && rp.error && h('div', { className: 'data-note', style: { marginBottom: 0 } }, rp.error),
-
-      rp && !rp.error && h('div', { className: 'calc-dos-col' },
-      h('div', { className: 'calc-col-sugerido' }, h(React.Fragment, null,
-        h('div', { className: 'precio-hero' }, money(rp.precio)),
-        h('div', { className: 'tramo-nota' },
-          rp.cargoFijo > 0
-            ? 'Tramo con cargo fijo: a ' + money(rp.precio) + ' Mercado Libre suma ' + money(rp.cargoFijo) +
-              ' por unidad además del ' + fp.cargoVenta + '% de comisión.'
-            : 'Sin cargo fijo: arriba de ' + money(33000) + ' Mercado Libre solo cobra el ' + fp.cargoVenta + '% de comisión.'),
-        rp.avisoSalto && h('div', { className: 'aviso-salto' }, rp.avisoSalto),
-        h('div', { className: 'costo-out-grid' },
-          h(CampoCalculado, { label: 'Comisión variable (' + fp.cargoVenta + '%)', value: money(rp.comisionML - rp.cargoFijo) }),
-          h(CampoCalculado, {
-            label: rp.cargoFijo > 0 ? 'Cargo fijo por unidad' : 'Cargo fijo (no aplica)',
-            value: rp.cargoFijo > 0 ? money(rp.cargoFijo) : '$0',
-            highlight: rp.cargoFijo > 0
-          }),
-          h(CampoCalculado, { label: 'Financiamiento (' + (fp.cuotas === 'sin' ? 'sin cuotas' : fp.cuotas + ' cuotas') + ')', value: money(rp.financiamientoARS) }),
-          h(CampoCalculado, { label: 'Envío al cliente', value: money(rp.envioCliente) }),
-          h(CampoCalculado, { label: packN > 1 ? 'Costo del producto (landed × ' + packN + ')' : 'Costo del producto (landed)', value: money(rp.costoProductoARS) }),
-          h(CampoCalculado, { label: 'Depósito de Mercado Libre', value: money(rp.depositoML) }),
-          h(CampoCalculado, { label: 'Ganancia s/costo producto', value: pct(rp.gananciaSobreCosto) }),
-          h(CampoCalculado, { label: 'Margen real (%)', value: pct(rp.margenReal), highlight: true }),
-          h(CampoCalculado, { label: 'Margen real ($)', value: money(rp.reciboPorVenta), highlight: true }),
-          packN > 1 && h(CampoCalculado, { label: 'Precio por unidad (pack de ' + packN + ')', value: money(rp.precio / packN) }),
-          packN > 1 && h(CampoCalculado, { label: 'Margen real por unidad ($)', value: money(rp.reciboPorVenta / packN) })),
-        packN > 1 && h('div', { className: 'data-note', style: { marginTop: 10, marginBottom: 0 } },
-          'Pack de ' + packN + ' unidades: cargá en "Costo Envío ML del pack" lo que cobra Mercado Libre por enviar el pack completo (puede ser distinto al envío de 1 unidad). Todos los montos de arriba son del pack entero.'))),
-      h('div', { className: 'calc-col-manual' }, tarjetaManual))));
+        h(CampoCalculado, { label: 'Financiamiento (' + (fp.cuotas === 'sin' ? 'sin cuotas' : fp.cuotas + ' cuotas') + ')', value: money(rp.financiamientoARS) }),
+        h(CampoCalculado, { label: 'Envío al cliente', value: money(rp.envioCliente) }),
+        h(CampoCalculado, { label: packN > 1 ? 'Costo del producto (× ' + packN + ')' : 'Costo del producto', value: money(rp.costoProductoARS) }),
+        h(CampoCalculado, { label: 'Depósito de Mercado Libre', value: money(rp.depositoML) }),
+        h(CampoCalculado, { label: 'Ganancia s/costo producto', value: pct(rp.gananciaSobreCosto) }),
+        h(CampoCalculado, { label: 'Margen real (%)', value: pct(rp.margenReal), highlight: true }),
+        h(CampoCalculado, { label: 'Margen real ($)', value: money(rp.reciboPorVenta), highlight: true }),
+        packN > 1 && h(CampoCalculado, { label: 'Precio por unidad (pack de ' + packN + ')', value: money(rp.precio / packN) }),
+        packN > 1 && h(CampoCalculado, { label: 'Margen real por unidad ($)', value: money(rp.reciboPorVenta / packN) })),
+      packN > 1 && h('div', { className: 'data-note', style: { marginTop: 10, marginBottom: 0 } },
+        'Pack de ' + packN + ' unidades: cargá en "Costo Envío ML del pack" lo que cobra Mercado Libre por enviar el pack completo (puede ser distinto al envío de 1 unidad). Todos los montos de arriba son del pack entero.'))),
+    h('div', { className: 'calc-col-manual' }, tarjetaManual, tarjetaCostoNecesario)));
 }
 
 
