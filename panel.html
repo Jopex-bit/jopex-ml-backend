@@ -6872,7 +6872,8 @@ const DASH_PERIODOS = [
 const DASH_SECCIONES = [
   { id: 'dia', label: 'Ganancia del día' },
   { id: 'negocio', label: 'Negocio General' },
-  { id: 'ventas', label: 'Ventas' }
+  { id: 'ventas', label: 'Ventas' },
+  { id: 'publicidad', label: 'Publicidad' }
 ];
 const DASH_MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 const DASH_REPUTACION = {
@@ -7100,6 +7101,7 @@ function DashboardPanel({ productosCosto, seleccion, irA }) {
   const ant = dashAgregar(ord, A.desde, A.hasta, costoDe);
   const adsCur = data.ads && data.ads.periodo ? data.ads.periodo.inversion : null;
   const adsAnt = data.ads && data.ads.anterior ? data.ads.anterior.inversion : null;
+  const adsObj = (data.ads && data.ads.periodo) || null;
   const fijCur = dashFijos(P.desde, P.hasta);
   const fijAnt = dashFijos(A.desde, A.hasta);
   const resultado = (t, ads, fij) => {
@@ -7306,6 +7308,58 @@ function DashboardPanel({ productosCosto, seleccion, irA }) {
           Object.keys(cuotas).map(Number).filter(n => n > 1).sort((a, b) => a - b).map(n =>
             fila('n' + n, n + ' cuotas', h('span', null, h('b', null, cuotas[n]), ' · ' + dashPct1(pctDe(cuotas[n], pagadas.length))))),
           enCuotas === 0 && h('div', { className: 'muted hoy-nota' }, 'Sin ventas en cuotas en el período.'))))));
+
+  if (ver('publicidad')) secciones.push(bloque('publicidad', 'Publicidad',
+    !adsObj
+      ? h('div', { className: 'sub-empty' }, 'Sin datos de Mercado Ads en el período (sin inversión, o Mercado Libre no respondió — mirá el diagnóstico al final de la página).')
+      : h('div', null,
+        (() => {
+          const roas = adsObj.inversion > 0 ? adsObj.ingresos / adsObj.inversion : null;
+          const acos = adsObj.ingresos > 0 ? adsObj.inversion / adsObj.ingresos * 100 : null;
+          const tacos = cur.fact > 0 ? adsObj.inversion / cur.fact * 100 : null;
+          const ctr = adsObj.impresiones > 0 ? adsObj.clics / adsObj.impresiones * 100 : null;
+          const cvrAds = adsObj.clics > 0 ? adsObj.ventas / adsObj.clics * 100 : null;
+          const cpc = adsObj.clics > 0 ? adsObj.inversion / adsObj.clics : null;
+          const cpa = adsObj.ventas > 0 ? adsObj.inversion / adsObj.ventas : null;
+          // Margen antes de Ads (igual que el margen del período, pero sin restar Ads): hasta dónde
+          // podés pagar de ROAS sin perder plata en la venta.
+          const margenAntesAds = cur.fact > 0 ? (cur.ingresoNeto - cur.cmv) / cur.fact : null;
+          const roasEq = margenAntesAds > 0 ? 1 / margenAntesAds : null;
+          const zona = roas == null || roasEq == null ? 'na' : roas < roasEq ? 'red' : roas < roasEq * 1.15 ? 'amber' : 'green';
+          const zonaTxt = { red: 'Te hace perder en cada venta', amber: 'Margen muy fino', green: 'Te deja ganancia', na: 'Sin margen calculable todavía' }[zona];
+          const orgUnid = Math.max(0, cur.unidades - adsObj.ventas);
+          return h(React.Fragment, null,
+            h('div', { className: 'kpi-row dash-kpis' },
+              kpi('inv', 'Inversión en Ads', dm(Math.round(adsObj.inversion)), varTxt(adsObj.inversion, adsAnt), 'blue', tag('Ads', 'api')),
+              kpi('roas', 'ROAS', roas != null ? roas.toLocaleString('es-AR', { maximumFractionDigits: 2 }) + 'x' : '—',
+                roasEq != null ? 'Equilibrio ' + roasEq.toLocaleString('es-AR', { maximumFractionDigits: 2 }) + 'x · ' + zonaTxt : zonaTxt,
+                zona === 'red' ? 'red' : zona === 'amber' ? 'amber' : zona === 'green' ? 'green' : 'blue'),
+              kpi('acos', 'ACOS', dashPct1(acos), 'inversión / ventas por Ads', 'blue'),
+              kpi('tacos', 'TACOS', dashPct1(tacos), 'inversión / facturación total', 'blue')),
+            h('div', { className: 'dash-grid2' },
+              h('div', null,
+                h('h3', { className: 'hoy-sub' }, 'Del impacto a la venta'),
+                fila('imp', 'Impresiones', h('b', null, Math.round(adsObj.impresiones).toLocaleString('es-AR'))),
+                fila('ctr', 'Clics' + (ctr != null ? ' · CTR ' + dashPct1(ctr) : ''), h('b', null, Math.round(adsObj.clics).toLocaleString('es-AR'))),
+                fila('cvr', 'Ventas por Ads' + (cvrAds != null ? ' · conversión ' + dashPct1(cvrAds) : ''), h('b', null, Math.round(adsObj.ventas))),
+                fila('cpc', 'CPC (costo por clic)', h('b', null, cpc != null ? dm(Math.round(cpc)) : '—')),
+                fila('cpa', 'CPA (costo por venta)', h('b', null, cpa != null ? dm(Math.round(cpa)) : '—')),
+                h('div', { className: 'muted hoy-nota' }, data.ads.nota || 'Según Mercado Ads, sin IVA.')),
+              h('div', null,
+                h('h3', { className: 'hoy-sub' }, 'Origen de tus unidades vendidas'),
+                fila('oa', 'Vendidas por Ads', h('span', null, h('b', null, adsObj.ventas), ' · ' + dashPct1(pctDe(adsObj.ventas, cur.unidades)))),
+                fila('oo', 'Orgánicas', h('span', null, h('b', null, orgUnid), ' · ' + dashPct1(pctDe(orgUnid, cur.unidades)))),
+                h('h3', { className: 'hoy-sub', style: { marginTop: 14 } }, 'Venta directa e indirecta (vía Ads)'),
+                fila('dir', 'Directa (el producto anunciado)', h('span', null, h('b', null, dm(Math.round(adsObj.monto_directo))), ' · ' + Math.round(adsObj.ventas_directas) + ' u')),
+                fila('ind', 'Indirecta (otro producto tuyo)', h('span', null, h('b', null, dm(Math.round(adsObj.monto_indirecto))), ' · ' + Math.round(adsObj.ventas_indirectas) + ' u')))),
+            h('h3', { className: 'hoy-sub', style: { marginTop: 18 } }, 'Inversión (barras) y facturación total (línea) por día'),
+            h(DashGraficoDias, {
+              dias: diasPeriodo,
+              barras: diasPeriodo.map(d => Math.round(adsDia[d] || 0)),
+              linea: diasPeriodo.map(d => Math.round(dashAgregar(ord, d, d, costoDe).fact))
+            }),
+            h('div', { className: 'muted hoy-nota' }, 'Pendiente: competitividad (ganado / perdido por ranking / perdido por presupuesto) — todavía no está confirmado qué métrica de Mercado Libre la trae.'));
+        })())));
 
   return h('div', { className: 'module-panel hoy-panel' }, cabecera, barraPeriodos,
     error && h('div', { className: 'hoy-aviso' }, 'No se pudo actualizar: ' + error + '. Se muestran los últimos datos cargados.'),
