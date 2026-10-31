@@ -25,6 +25,15 @@ const CANDIDATOS = [
   'share_of_voice',
   'top_impression_share',
   'absolute_top_impression_share',
+  // Agregados después de ver, en vivo, los nombres que usa MargenFull para este
+  // mismo dato (ads_competitividad.lost_budget / lost_rank / won) — puede que
+  // sean el nombre real del campo, o un nombre propio de ellos.
+  'lost_budget',
+  'lost_rank',
+  'won',
+  'impression_share_lost_budget',
+  'impression_share_lost_rank',
+  'impression_share_won',
 ];
 
 module.exports = (app) => {
@@ -38,8 +47,14 @@ module.exports = (app) => {
       const API = app.locals.ML_API;
       const auth = { headers: { Authorization: `Bearer ${token}` } };
 
+      // En vivo, en MargenFull, este dato vino lleno para un período que incluye
+      // hoy (y su rótulo dice "últimos 7 días"), y null para un período más
+      // viejo — probablemente Mercado Libre solo lo expone para una ventana
+      // corta y reciente. ?dias= permite reprobar con otra ventana sin redeploy.
+      const dias = Math.min(Math.max(Number(req.query.dias) || 7, 1), 90);
       const hoy = new Date().toISOString().slice(0, 10);
-      const hace30 = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+      const desdeVentana = new Date(Date.now() - dias * 86400000).toISOString().slice(0, 10);
+      reporte.ventana_probada = { desde: desdeVentana, hasta: hoy, dias };
 
       // ---- Advertiser ----
       const adv = await axios.get(`${API}/advertising/advertisers`, {
@@ -66,7 +81,7 @@ module.exports = (app) => {
         try {
           const r = await axios.get(`${base}/campaigns/search`, {
             headers: { ...auth.headers, 'Api-Version': '2' }, timeout: 15000,
-            params: { limit: 1, offset: 0, metrics: campo, metrics_summary: true, date_from: hace30, date_to: hoy },
+            params: { limit: 1, offset: 0, metrics: campo, metrics_summary: true, date_from: desdeVentana, date_to: hoy },
           });
           const resumen = r.data && r.data.metrics_summary;
           const valor = resumen ? resumen[campo] : undefined;
@@ -82,7 +97,7 @@ module.exports = (app) => {
         try {
           const r = await axios.get(`${base}/campaigns/search`, {
             headers: { ...auth.headers, 'Api-Version': '2' }, timeout: 15000,
-            params: { limit: 1, offset: 0, metrics: aceptados.join(','), metrics_summary: true, date_from: hace30, date_to: hoy },
+            params: { limit: 1, offset: 0, metrics: aceptados.join(','), metrics_summary: true, date_from: desdeVentana, date_to: hoy },
           });
           reporte.pruebas.combinado = { ok: true, campos_pedidos: aceptados, metrics_summary: r.data && r.data.metrics_summary };
         } catch (e) {
