@@ -170,8 +170,14 @@ module.exports = (app) => {
       return null;
     }
   }
+  // Mismo set de métricas que usa el módulo Ads (routes/ads.js): además de
+  // inversión/clics/impresiones, trae la unidades y el monto atribuidos
+  // directa (al producto anunciado) e indirectamente (otro producto del
+  // vendedor tras el clic) — hace falta para "Origen de ventas" y "Venta
+  // directa e indirecta" en Publicidad.
+  const ADS_METRICAS = 'clicks,prints,cost,units_quantity,direct_units_quantity,indirect_units_quantity,total_amount,direct_amount,indirect_amount';
   function sumarMetricas(lista) {
-    const t = { inversion: 0, ingresos: 0, ventas: 0, clics: 0, impresiones: 0 };
+    const t = { inversion: 0, ingresos: 0, ventas: 0, clics: 0, impresiones: 0, ventas_directas: 0, ventas_indirectas: 0, monto_directo: 0, monto_indirecto: 0 };
     lista.forEach(m => {
       if (!m) return;
       t.inversion += Number(m.cost) || 0;
@@ -179,6 +185,10 @@ module.exports = (app) => {
       t.ventas += Number(m.units_quantity) || 0;
       t.clics += Number(m.clicks) || 0;
       t.impresiones += Number(m.prints) || 0;
+      t.ventas_directas += Number(m.direct_units_quantity) || 0;
+      t.ventas_indirectas += Number(m.indirect_units_quantity) || 0;
+      t.monto_directo += Number(m.direct_amount) || 0;
+      t.monto_indirecto += Number(m.indirect_amount) || 0;
     });
     return t;
   }
@@ -189,7 +199,7 @@ module.exports = (app) => {
     try {
       const r = await axios.get(`${base}/campaigns/search`, {
         headers: { ...ctx.auth.headers, 'Api-Version': '2' }, timeout: 20000,
-        params: { limit: 50, offset: 0, metrics: 'clicks,prints,cost,units_quantity,total_amount', metrics_summary: true, date_from: desde, date_to: hasta },
+        params: { limit: 50, offset: 0, metrics: ADS_METRICAS, metrics_summary: true, date_from: desde, date_to: hasta },
       });
       if (r.data && r.data.metrics_summary) return sumarMetricas([r.data.metrics_summary]);
       const lista = (r.data && (r.data.results || r.data.campaigns)) || [];
