@@ -200,6 +200,10 @@ app.use('/api/estado', requireApiKey, require('./routes/estado')(app));
 app.use('/api/dashboard', requireApiKey, require('./routes/dashboard')(app));
 // Radar de mercado: investigación de oportunidades de producto.
 app.use('/api/mercado', requireApiKey, require('./routes/mercado')(app));
+// Avisos por Telegram de ventas Flex: webhook público de ML + rutas de configuración.
+const notificaciones = require('./routes/notificaciones')(app);
+app.use('/webhooks', notificaciones.webhook);
+app.use('/api/notificaciones', requireApiKey, notificaciones.api);
 
 // ---------------------------------------------------------------------------
 // Panel web: login + servir el HTML

@@ -76,4 +76,25 @@ async function saveKey(clave, data) {
   fs.writeFileSync(path.join(__dirname, clave + '.json'), JSON.stringify(data, null, 2));
 }
 
-module.exports = { read, save, usarUpstash, readKey, saveKey };
+// ---------- Marca de "ya procesado" (para no avisar dos veces) ----------
+// Devuelve true la PRIMERA vez que se marca una clave, false si ya existía.
+// En Upstash usa SET NX EX (atómico y con vencimiento). Sin Upstash, cae a
+// memoria (se pierde al reiniciar: en el peor caso, un aviso repetido).
+const marcasLocales = new Map();
+async function marcarUnaVez(clave, ttlSeg) {
+  if (usarUpstash) {
+    const r = await redisCmd(['SET', clave, '1', 'NX', 'EX', String(ttlSeg)]);
+    return r === 'OK';
+  }
+  const ahora = Date.now();
+  const vence = marcasLocales.get(clave);
+  if (vence && vence > ahora) return false;
+  marcasLocales.set(clave, ahora + ttlSeg * 1000);
+  return true;
+}
+async function desmarcar(clave) {
+  if (usarUpstash) { await redisCmd(['DEL', clave]); return; }
+  marcasLocales.delete(clave);
+}
+
+module.exports = { read, save, usarUpstash, readKey, saveKey, marcarUnaVez, desmarcar };
