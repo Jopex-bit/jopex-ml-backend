@@ -34,10 +34,16 @@ const fmtFecha = new Intl.DateTimeFormat('es-AR', {
 });
 const fmtPesos = new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 });
 
+const fmtDia = new Intl.DateTimeFormat('es-AR', { timeZone: TZ_AR, weekday: 'short', day: '2-digit', month: '2-digit' });
+const fmtHora = new Intl.DateTimeFormat('es-AR', { timeZone: TZ_AR, hour: '2-digit', minute: '2-digit', hour12: false });
+
+// Si ML manda solo el día (hora 00:00 en Argentina), mostramos solo el día:
+// "00:00" haría pensar que hay que entregar a medianoche.
 function fecha(iso) {
   if (!iso) return null;
   const d = new Date(iso);
-  return isNaN(d) ? null : fmtFecha.format(d);
+  if (isNaN(d)) return null;
+  return fmtHora.format(d) === '00:00' ? fmtDia.format(d) : fmtFecha.format(d);
 }
 
 // Telegram en modo HTML: hay que escapar lo que viene de ML.
@@ -78,12 +84,13 @@ async function enviarTelegram(texto) {
 // Arma el mensaje a partir de la orden y el envío de ML.
 function armarMensaje(orden, envio) {
   const tipo = tipoEnvio(envio?.logistic_type);
-  const items = (orden.order_items || []).map(it =>
-    `• ${esc(it.quantity)} × ${esc(it.item?.title)}` +
-    (it.item?.variation_attributes?.length
-      ? ` (${esc(it.item.variation_attributes.map(v => v.value_name).filter(Boolean).join(', '))})`
-      : '')
-  ).join('\n');
+  const items = (orden.order_items || []).map(it => {
+    const titulo = String(it.item?.title || '');
+    // La variante solo si agrega algo que el título no dice ya.
+    const extra = (it.item?.variation_attributes || []).map(v => v.value_name).filter(Boolean)
+      .filter(v => !titulo.toLowerCase().includes(String(v).toLowerCase()));
+    return `• ${esc(it.quantity)} × ${esc(titulo)}` + (extra.length ? ` (${esc(extra.join(', '))})` : '');
+  }).join('\n');
 
   const lineas = [
     `${tipo === 'FLEX' ? '🛵' : '📦'} <b>Venta ${tipo}</b> — ${esc(fmtPesos.format(Number(orden.total_amount) || 0))}`,
@@ -96,7 +103,9 @@ function armarMensaje(orden, envio) {
     const zona = [dir.neighborhood?.name, dir.city?.name].filter(Boolean).join(', ');
     lineas.push('', `📍 ${esc(calle)}${zona ? ' — ' + esc(zona) : ''}`);
     if (dir.comment) lineas.push(`📝 ${esc(dir.comment)}`);
-    if (dir.receiver_name) lineas.push(`👤 ${esc(dir.receiver_name)}${dir.receiver_phone ? ' · ' + esc(dir.receiver_phone) : ''}`);
+    // ML suele ocultar el teléfono ("XXXXXXX"): solo lo mostramos si trae dígitos.
+    const tel = /\d{6,}/.test(String(dir.receiver_phone || '')) ? dir.receiver_phone : null;
+    if (dir.receiver_name) lineas.push(`👤 ${esc(dir.receiver_name)}${tel ? ' · ' + esc(tel) : ''}`);
   }
 
   // Fecha límite de entrega que ML le prometió al comprador.
