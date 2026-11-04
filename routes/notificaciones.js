@@ -199,9 +199,22 @@ module.exports = (app) => {
   });
 
   // Simula el aviso con una orden real (no marca nada como avisado).
+  // Acepta el ID de orden o el número de venta que muestra ML ("Venta #…", que es el pack).
   api.get('/orden/:id', async (req, res) => {
     try {
-      const r = await evaluarOrden(req.params.id, { forzar: true });
+      let id = req.params.id;
+      try {
+        const c = await ctx();
+        await axios.get(`${c.API}/orders/${id}`, c.auth);
+      } catch (e) {
+        if (e.response?.status !== 404) throw e;
+        const c = await ctx();
+        const pack = (await axios.get(`${c.API}/packs/${id}`, c.auth)).data;
+        const primera = (pack.orders || [])[0];
+        if (!primera) throw new Error('No se encontró orden ni pack con ese número.');
+        id = primera.id;
+      }
+      const r = await evaluarOrden(id, { forzar: true });
       if (req.query.enviar === '1') await enviarTelegram(r.mensaje);
       res.json({ tipo: tipoEnvio(r.envio?.logistic_type), enviado: req.query.enviar === '1', mensaje: r.mensaje });
     } catch (e) {
