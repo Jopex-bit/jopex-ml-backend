@@ -27,6 +27,8 @@ const axios = require('axios');
 
 const TZ_AR = 'America/Argentina/Buenos_Aires';
 const TTL_AVISADA = 30 * 24 * 3600; // 30 días
+// Estados del envío en los que la venta todavía requiere despacho.
+const PENDIENTE_DESPACHO = ['pending', 'handling', 'ready_to_ship'];
 
 const fmtFecha = new Intl.DateTimeFormat('es-AR', {
   timeZone: TZ_AR, weekday: 'short', day: '2-digit', month: '2-digit',
@@ -142,6 +144,15 @@ module.exports = (app) => {
     if (!forzar && !esFlex && process.env.NOTIFICAR_TODAS !== '1') {
       return { avisar: false, motivo: `envío ${envio?.logistic_type || 'sin envío'}` };
     }
+    // Solo avisamos lo que todavía hay que despachar. ML vuelve a notificar la
+    // orden cuando se despacha, se entrega, se califica, etc.: esos cambios no
+    // son ventas nuevas y no tienen que generar mensaje.
+    if (!forzar && envio && !PENDIENTE_DESPACHO.includes(envio.status)) {
+      return { avisar: false, motivo: `envío en estado ${envio.status}` };
+    }
+    // Red de seguridad: una orden de hace más de 3 días no es una venta nueva.
+    const horas = (Date.now() - new Date(orden.date_created).getTime()) / 3600000;
+    if (!forzar && horas > 72) return { avisar: false, motivo: `orden de hace ${Math.round(horas)} h` };
     return { avisar: true, orden, envio, mensaje: armarMensaje(orden, envio) };
   }
 
@@ -224,7 +235,11 @@ module.exports = (app) => {
         id = primera.id;
       }
       const r = await evaluarOrden(id, { forzar: true });
-      if (req.query.enviar === '1') await enviarTelegram(r.mensaje);
+      if (req.query.enviar === '1') {
+        await enviarTelegram(r.mensaje);
+        // La prueba cuenta como aviso: así ML no la vuelve a mandar más tarde.
+        await store.marcarUnaVez(`jopex_avisada_${r.orden.id}`, TTL_AVISADA).catch(() => {});
+      }
       res.json({ tipo: tipoEnvio(r.envio?.logistic_type), enviado: req.query.enviar === '1', mensaje: r.mensaje });
     } catch (e) {
       res.status(500).json({ error: e.response?.data || e.message });
