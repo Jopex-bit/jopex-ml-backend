@@ -52,6 +52,61 @@ function tipoEnvio(lt) {
   return 'otro';
 }
 
+// ---------------------------------------------------------------------------
+// Zonas de la empresa de mensajería (Novaflex) para envíos FLEX, a partir de
+// su lista de partidos/localidades por zona (PDF de tarifas del usuario).
+// Para CABA no hace falta lista: cualquier barrio de Capital Federal entra.
+// Fuera de CABA/Buenos Aires, Novaflex no tiene zona definida (envío al
+// interior, típico de Full, no de Flex) — eso NO es "sin clasificar", es
+// directamente "fuera de su área de cobertura".
+// ---------------------------------------------------------------------------
+const EMPAQUETADO_NOVAFLEX = 1500;
+const ZONAS_NOVAFLEX = [
+  { zona: 'CABA', tarifa: 4300 },
+  {
+    zona: 'Cordón 1', tarifa: 4500,
+    nombres: ['vicente lopez', 'san isidro', 'san martin', 'general san martin', 'tres de febrero',
+      'hurlingham', 'ituzaingo', 'moron', 'ramos mejia', 'lomas del mirador', 'villa luzuriaga',
+      'san justo', 'la tablada', 'villa madero', 'tapiales', 'aldo bonzi', 'lomas de zamora',
+      'lanus', 'avellaneda'],
+  },
+  {
+    zona: 'Cordón 2', tarifa: 6300,
+    nombres: ['villa celina', 'ciudad de evita', 'isidro casanova', 'rafael castillo',
+      'gonzalez catan', 'laferrere', 'virrey del pino', '20 de junio', 'san fernando',
+      'san miguel', 'malvinas argentinas', 'jose c paz', 'moreno', 'merlo', 'esteban echeverria',
+      'almirante brown', 'quilmes', 'florencio varela', 'berazategui', 'ezeiza'],
+  },
+  {
+    zona: 'Cordón 3', tarifa: 8300,
+    nombres: ['zarate', 'campana', 'cardales', 'escobar', 'pilar', 'tigre', 'lujan',
+      'general rodriguez', 'marcos paz', 'canuelas', 'san vicente', 'presidente peron',
+      'la plata', 'ensenada', 'berisso', 'del viso', 'derqui', 'garin', 'guernica',
+      'ing maschwitz', 'ingeniero maschwitz', 'nordelta', 'villa rosa'],
+  },
+];
+function normalizarTexto(s) {
+  return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+// null = sin dato para decidir. { zona: null, fueraDeAlcance: true } = la
+// provincia no es CABA/Buenos Aires, Novaflex no cubre esa zona. { zona:
+// null, fueraDeAlcance: false } = es Buenos Aires pero ninguna localidad
+// conocida matcheó (localidad nueva o mal escrita, revisar a mano).
+function zonaNovaflex(provincia, localidad) {
+  const prov = normalizarTexto(provincia);
+  if (!prov) return null;
+  if (prov === 'capital federal') return { zona: 'CABA', tarifa: 4300 };
+  if (prov !== 'buenos aires') return { zona: null, fueraDeAlcance: true };
+  const loc = normalizarTexto(localidad);
+  if (!loc) return null;
+  for (const z of ZONAS_NOVAFLEX) {
+    if (!z.nombres) continue;
+    if (z.nombres.some(n => loc === n || loc.includes(n))) return { zona: z.zona, tarifa: z.tarifa };
+  }
+  return { zona: null, fueraDeAlcance: false };
+}
+
 // Una orden de ML reducida a lo que usa el Dashboard.
 function normalizarOrden(o) {
   const f = new Date(o.date_created);
@@ -142,9 +197,20 @@ module.exports = (app) => {
     try {
       const r = await axios.get(`${ctx.API}/shipments/${sid}`, { ...ctx.auth, timeout: 10000 });
       out.tipo = tipoEnvio(r.data && r.data.logistic_type);
-      const st = r.data && r.data.receiver_address && r.data.receiver_address.state;
+      const ra = r.data && r.data.receiver_address;
+      const st = ra && ra.state;
       out.provincia = st ? (st.name || st.id || null) : null;
       out.ok = true;
+      // Zona de mensajería (Novaflex) y su costo estimado: solo tiene sentido
+      // para Flex (self_service), Full es mayormente envío al interior.
+      if (out.tipo === 'flex') {
+        const localidad = ra && ra.city ? ra.city.name : null;
+        const zona = zonaNovaflex(out.provincia, localidad);
+        if (zona) {
+          out.zona_novaflex = zona;
+          if (zona.tarifa != null) out.costo_novaflex_estimado = zona.tarifa + EMPAQUETADO_NOVAFLEX;
+        }
+      }
     } catch (e) { return out; }
     try {
       const c = await axios.get(`${ctx.API}/shipments/${sid}/costs`, { ...ctx.auth, timeout: 10000 });
@@ -273,7 +339,13 @@ module.exports = (app) => {
       const pedirEnvio = {};
       nuevas.forEach(o => {
         const vieja = previo.ordenes[o.id];
-        const reusar = vieja && vieja.envio && vieja.envio.ok && vieja.envio_id === o.envio_id &&
+        // Si es Flex, el envío cacheado tiene que traer ya la zona Novaflex
+        // calculada (campo agregado después); si no, hay que repedirlo aunque
+        // el resto del envío sea válido, o la zona queda sin clasificar para
+        // siempre con datos viejos.
+        const zonaOk = vieja && vieja.envio && vieja.envio.tipo === 'flex'
+          ? vieja.envio.zona_novaflex !== undefined : true;
+        const reusar = vieja && vieja.envio && vieja.envio.ok && vieja.envio_id === o.envio_id && zonaOk &&
           (vieja.envio.vendedor != null || o.dia < limiteRefresco);
         if (reusar) o.envio = vieja.envio;
         else if (o.envio_id && o.estado === 'paid') pedirEnvio[o.envio_id] = null;

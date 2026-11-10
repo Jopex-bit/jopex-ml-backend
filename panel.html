@@ -7231,6 +7231,7 @@ function DashboardPanel({ productosCosto, seleccion, irA }) {
   const porDia = {};
   const cuotas = {};
   let recurrentes = 0;
+  const novaflex = { zonas: {}, total: 0, sinClasificar: 0, fueraDeAlcance: 0 };
   pagadas.forEach(o => {
     const tipo = o.envio && o.envio.tipo;
     if (tipo === 'full') canal.full++; else if (tipo === 'flex') canal.flex++; else if (tipo) canal.propio++; else canal.sinDato++;
@@ -7240,6 +7241,16 @@ function DashboardPanel({ productosCosto, seleccion, irA }) {
     const c = Number(o.cuotas) || 1;
     cuotas[c] = (cuotas[c] || 0) + 1;
     if (o.recurrente) recurrentes++;
+    if (tipo === 'flex') {
+      const zn = o.envio.zona_novaflex;
+      if (zn && zn.zona) {
+        if (!novaflex.zonas[zn.zona]) novaflex.zonas[zn.zona] = { cantidad: 0, costo: 0 };
+        novaflex.zonas[zn.zona].cantidad++;
+        novaflex.zonas[zn.zona].costo += o.envio.costo_novaflex_estimado || 0;
+        novaflex.total += o.envio.costo_novaflex_estimado || 0;
+      } else if (zn && zn.fueraDeAlcance) novaflex.fueraDeAlcance++;
+      else novaflex.sinClasificar++;
+    }
   });
   const pico = porHora.indexOf(Math.max(...porHora));
   const contado = cuotas[1] || 0;
@@ -7356,6 +7367,17 @@ function DashboardPanel({ productosCosto, seleccion, irA }) {
           fila('pc', 'Paga el comprador (sin costo para vos)', h('b', null, paga.comprador)),
           fila('pv', 'Paga el vendedor (costo a tu cargo)', h('b', null, paga.vendedor)),
           paga.sinDato > 0 && fila('ps', 'Sin dato', h('b', null, paga.sinDato)),
+          canal.flex > 0 && h(React.Fragment, null,
+            h('h3', { className: 'hoy-sub' }, 'Costo estimado Novaflex (envíos Flex)'),
+            Object.keys(novaflex.zonas).length
+              ? Object.entries(novaflex.zonas).map(([zona, d]) => fila('nz-' + zona, zona,
+                h('span', null, h('b', null, d.cantidad), ' · ' + dm(Math.round(d.costo)))))
+              : h('div', { className: 'sub-empty' }, 'Ninguna venta Flex del período cayó en una zona conocida.'),
+            Object.keys(novaflex.zonas).length > 0 && fila('nz-total', h('b', null, 'Total estimado'), h('b', null, dm(Math.round(novaflex.total)))),
+            (novaflex.sinClasificar > 0 || novaflex.fueraDeAlcance > 0) && h('div', { className: 'muted hoy-nota' },
+              [novaflex.sinClasificar > 0 ? novaflex.sinClasificar + ' sin clasificar (localidad no reconocida)' : null,
+                novaflex.fueraDeAlcance > 0 ? novaflex.fueraDeAlcance + ' fuera del área de Novaflex' : null].filter(Boolean).join(' · ')),
+            h('div', { className: 'muted hoy-nota' }, 'Estimado: tarifa de zona + $1.500 de empaquetado, sin IVA. No incluye despacho en agencia.')),
           h('h3', { className: 'hoy-sub' }, 'Reputación en Mercado Libre'),
           data.reputacion ? fila('rep',
             h('span', null, h('span', { className: 'hoy-punto', style: { background: rep ? rep.color : '#666' } }), rep ? rep.label : (data.reputacion.nivel || 'Sin color todavía')),
