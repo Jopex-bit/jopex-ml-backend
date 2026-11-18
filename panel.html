@@ -479,29 +479,20 @@ const LayoutGrid = props => /*#__PURE__*/React.createElement(Icon, props,
   /*#__PURE__*/React.createElement("rect", { x: "14", y: "3", width: "7", height: "7", rx: "1" }),
   /*#__PURE__*/React.createElement("rect", { x: "14", y: "14", width: "7", height: "7", rx: "1" }),
   /*#__PURE__*/React.createElement("rect", { x: "3", y: "14", width: "7", height: "7", rx: "1" }));
+// Menú lateral: 6 grupos, en el orden del negocio (mirar el día, buscar,
+// costear, stockear, vender, medir). Algunas pantallas viven DENTRO de un grupo
+// como submódulo (ver GRUPO_DE_PANTALLA): no se borró ninguna, solo se movieron.
 const MODULES = [{
-  id: 'dashboard',
-  label: 'Dashboard',
-  icon: LayoutGrid
-}, {
-  id: 'hoy',
-  label: 'Hoy',
+  id: 'inicio',
+  label: 'Inicio',
   icon: Sun
-}, {
-  id: 'calculadora',
-  label: 'Calculadora de Costo Rápido',
-  icon: Calculator
-}, {
-  id: 'tiendanube',
-  label: 'Tienda Nube',
-  icon: CreditCard
 }, {
   id: 'investigacion',
   label: 'Investigación',
   icon: Search
 }, {
   id: 'costos',
-  label: 'Costos',
+  label: 'Costos y precios',
   icon: DollarSign
 }, {
   id: 'stock',
@@ -516,6 +507,15 @@ const MODULES = [{
   label: 'Evolución',
   icon: TrendingUp
 }];
+// Pantalla (la que se dibuja) -> grupo del menú en el que vive.
+//   Inicio:        Hoy + las secciones del ex Dashboard (Ganancia del día, Negocio General, Ventas)
+//   Investigación: + Calculadora rápida (misma cascada de landed cost)
+//   Costos:        + Precios Tienda Nube (sale del costo de Costos)
+//   Ads:           + Resultados por período (ex Dashboard > Publicidad)
+const GRUPO_DE_PANTALLA = { hoy: 'inicio', dashboard: 'inicio', calculadora: 'investigacion', tiendanube: 'costos', ads_resultados: 'ads' };
+const grupoDe = pantalla => GRUPO_DE_PANTALLA[pantalla] || pantalla;
+// Al tocar el título de un grupo, la pantalla que se abre.
+const PANTALLA_INICIAL_DE = { inicio: 'hoy' };
 
 // Columnas editables por módulo genérico (Ads, Investigación — el resto tiene
 // componentes propios con cálculo real: Costos, Evolución y Stock).
@@ -7093,7 +7093,7 @@ function DashHoras({ porHora }) {
     [0, 4, 8, 12, 16, 20].map(i => h('text', { key: 't' + i, x: P + ancho * i + ancho / 2, y: H - 3, textAnchor: 'middle' }, i + 'h')));
 }
 
-function DashboardPanel({ productosCosto, seleccion, irA }) {
+function DashboardPanel({ productosCosto, seleccion, irA, titulo }) {
   const h = React.createElement;
   const [periodo, setPeriodo] = useState(() => {
     try { return window.localStorage.getItem('jopex_dash_periodo') || 'mes'; } catch (e) { return 'mes'; }
@@ -7160,7 +7160,7 @@ function DashboardPanel({ productosCosto, seleccion, irA }) {
       data && h('span', { className: 'muted dash-actualizado' }, 'Actualizado ' + fechaHoraCorta(data.generado_en)),
       h('button', { type: 'button', className: 'add-btn sync-btn', disabled: cargando, onClick: () => cargar(true) }, cargando ? 'Actualizando…' : 'Actualizar')));
 
-  const cabecera = h('div', { className: 'module-header' }, h('h1', null, 'Dashboard'), h('p', null, MODULE_DESC.dashboard));
+  const cabecera = h('div', { className: 'module-header' }, h('h1', null, titulo || 'Dashboard'), h('p', null, MODULE_DESC.dashboard));
 
   if (!data) {
     return h('div', { className: 'module-panel hoy-panel' }, cabecera, barraPeriodos,
@@ -7499,7 +7499,15 @@ function ModulePanel({
   if (moduleId === 'dashboard') return /*#__PURE__*/React.createElement(DashboardPanel, {
     productosCosto: productosCosto,
     seleccion: sel.dashboard,
-    irA: irA
+    irA: irA,
+    titulo: ((DASH_SECCIONES.find(s => s.id === sel.dashboard) || {}).label) || 'Tablero completo'
+  });
+  // Ads > Resultados por período: la sección Publicidad del ex Dashboard.
+  if (moduleId === 'ads_resultados') return /*#__PURE__*/React.createElement(DashboardPanel, {
+    productosCosto: productosCosto,
+    seleccion: 'publicidad',
+    irA: irA,
+    titulo: 'Resultados de publicidad'
   });
   if (moduleId === 'investigacion') return /*#__PURE__*/React.createElement(InvestigacionPanel, {
     productos: productos,
@@ -7863,7 +7871,7 @@ function JopexPanel() {
   const [sel, setSel] = useState({ costos: '', investigacion: '', stock: '' });
   const elegir = (mod, id) => setSel(p => ({ ...p, [mod]: id, ...(mod === 'costos' ? { costosFoco: '' } : {}) }));
   // Salto desde el buscador global: abre el módulo, elige el ítem del menú y, en Costos, deja abierto ese SKU.
-  const irA = (mod, id, foco) => { setSel(p => ({ ...p, [mod]: id, ...(mod === 'costos' ? { costosFoco: foco || '' } : {}) })); setActive(mod); setAbiertos({ [mod]: true }); };
+  const irA = (mod, id, foco) => { setSel(p => ({ ...p, [mod]: id, ...(mod === 'costos' ? { costosFoco: foco || '' } : {}) })); setActive(mod); setAbiertos({ [grupoDe(mod)]: true }); };
 
   // ---- Módulos plegables (acordeón) ----
   // Un solo módulo desplegado a la vez: al tocar el título de otro módulo, el que estaba
@@ -7876,12 +7884,12 @@ function JopexPanel() {
         // Si quedaron varios abiertos de la versión anterior, nos quedamos con uno solo.
         const g = JSON.parse(s); const ids = Object.keys(g).filter(k => g[k]);
         if (ids.length <= 1) return g;
-        const act = window.localStorage.getItem('jopex_active_module');
+        const act = grupoDe(window.localStorage.getItem('jopex_active_module'));
         return { [ids.includes(act) ? act : ids[0]]: true };
       }
     } catch (e) {}
-    // La primera vez, abierto el módulo en el que estás parado.
-    try { return { [window.localStorage.getItem('jopex_active_module') || 'costos']: true }; }
+    // La primera vez, abierto el grupo en el que estás parado.
+    try { return { [grupoDe(window.localStorage.getItem('jopex_active_module') || 'costos')]: true }; }
     catch (e) { return { costos: true }; }
   });
   React.useEffect(() => {
@@ -7971,6 +7979,43 @@ function JopexPanel() {
     vistos[k] = true;
     clavesInv.push({ id: k, label: (c.producto || '(sin nombre)').slice(0, 34) });
   });
+
+  // ---- Submenú de cada grupo ----
+  // Cada ítem dice qué pantalla abre (y qué elige adentro). Los "especiales" son
+  // pantallas que antes eran un módulo propio y ahora viven dentro del grupo.
+  const irPantalla = (pantalla, mod, id) => { if (mod) elegir(mod, id); setActive(pantalla); cerrarSiChico(); };
+  const lista = (mod, items) => [
+    { key: '__todos', todos: true, label: 'Ver todos', activo: active === mod && !sel[mod], onClick: () => irPantalla(mod, mod, '') },
+    ...(items || []).map(s => ({
+      key: s.id, label: s.label, alerta: s.alerta,
+      activo: active === mod && sel[mod] === s.id,
+      onClick: () => irPantalla(mod, mod, s.id)
+    }))
+  ];
+  const subDe = g => {
+    if (g === 'inicio') return [
+      { key: 'hoy', label: 'Para hacer hoy', activo: active === 'hoy', onClick: () => irPantalla('hoy') },
+      ...DASH_SECCIONES.filter(s => s.id !== 'publicidad').map(s => ({
+        key: s.id, label: s.label, activo: active === 'dashboard' && sel.dashboard === s.id,
+        onClick: () => irPantalla('dashboard', 'dashboard', s.id)
+      })),
+      { key: '__tablero', label: 'Tablero completo', activo: active === 'dashboard' && !sel.dashboard, onClick: () => irPantalla('dashboard', 'dashboard', '') }
+    ];
+    if (g === 'investigacion') return [
+      { key: '__calc', especial: true, label: 'Calculadora rápida', activo: active === 'calculadora', onClick: () => irPantalla('calculadora') },
+      ...lista('investigacion', clavesInv)
+    ];
+    if (g === 'costos') return [
+      { key: '__tn', especial: true, label: 'Precios Tienda Nube', activo: active === 'tiendanube', onClick: () => irPantalla('tiendanube') },
+      ...lista('costos', subCostos)
+    ];
+    if (g === 'stock') return lista('stock', subStock);
+    if (g === 'ads') return [
+      { key: '__res', especial: true, label: 'Resultados por período', activo: active === 'ads_resultados', onClick: () => irPantalla('ads_resultados') },
+      ...lista('ads', subAds)
+    ];
+    return null;
+  };
   return /*#__PURE__*/React.createElement("div", {
     className: "jopex-root"
   }, /*#__PURE__*/React.createElement("style", null, `
@@ -9212,6 +9257,12 @@ function JopexPanel() {
         .nav-subitem.active {
           background: rgba(61,220,60,0.1); color: var(--lime); font-weight: 600;
         }
+        /* Submódulos fijos (ex módulos propios): arriba de la lista, con una línea que los separa */
+        .nav-subitem.especial {
+          color: var(--text-primary); font-weight: 600;
+          border-bottom: 1px solid var(--border-soft); border-radius: 6px 6px 0 0; margin-bottom: 3px;
+        }
+        .nav-subitem.especial.active { color: var(--lime); }
         .nav-item-txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .nav-flecha {
           flex-shrink: 0; font-size: 16px; line-height: 1; color: var(--text-secondary);
@@ -9547,7 +9598,7 @@ function JopexPanel() {
       /*#__PURE__*/React.createElement("i", null),
       /*#__PURE__*/React.createElement("i", null)),
      /*#__PURE__*/React.createElement("span", { className: "menu-btn-txt" },
-      (MODULES.find(x => x.id === active) || {}).label || 'Menú')
+      (MODULES.find(x => x.id === grupoDe(active)) || {}).label || 'Menú')
   ), /*#__PURE__*/React.createElement("div", {
     className: "logo-wrap"
   }, /*#__PURE__*/React.createElement("img", {
@@ -9567,40 +9618,35 @@ function JopexPanel() {
     onClick: () => setMenuAbierto(false)
   }, "\u2715"), MODULES.map(m => {
     const Icon = m.icon;
-    const sub = m.id === 'dashboard' ? DASH_SECCIONES
-      : m.id === 'costos' ? subCostos
-      : (m.id === 'investigacion' ? clavesInv
-      : (m.id === 'stock' ? subStock
-      : (m.id === 'ads' ? subAds : null)));
+    const sub = subDe(m.id);
+    const enEsteGrupo = grupoDe(active) === m.id;
     const abierto = !!sub && !!abiertos[m.id];
+    // El numerito cuenta los ítems propios del grupo (SKU, campañas…), no los submódulos fijos.
+    const cuenta = m.id === 'inicio' || !sub ? null : sub.filter(s => !s.especial && !s.todos).length;
     return /*#__PURE__*/React.createElement("div", { key: m.id, className: "nav-grupo" },
       /*#__PURE__*/React.createElement("button", {
         type: "button",
-        className: `nav-item ${active === m.id ? 'active' : ''} ${abierto ? 'desplegado' : ''}`,
+        className: `nav-item ${enEsteGrupo ? 'active' : ''} ${abierto ? 'desplegado' : ''}`,
         "aria-expanded": sub ? String(abierto) : undefined,
         onClick: () => {
-          setActive(m.id);
-          // Con submenú: despliega este módulo y pliega el resto (o alterna si ya estabas acá).
+          // Si venías de otro grupo, abre su pantalla principal. Si ya estabas en el grupo, no te saca de donde estás.
+          if (!enEsteGrupo) setActive(PANTALLA_INICIAL_DE[m.id] || m.id);
+          // Con submenú: despliega este grupo y pliega el resto (o alterna si ya estabas acá).
           // Sin submenú no hay nada que desplegar: se pliega todo y en el celular cerramos el cajón.
-          if (sub) alternarGrupo(m.id, active === m.id);
+          if (sub) alternarGrupo(m.id, enEsteGrupo);
           else { setAbiertos({}); cerrarSiChico(); }
         }
       }, /*#__PURE__*/React.createElement(Icon, { size: 18 }),
          /*#__PURE__*/React.createElement("span", { className: "nav-item-txt" }, m.label),
-         sub ? /*#__PURE__*/React.createElement("span", { className: "nav-count" }, sub.length) : null,
+         cuenta != null ? /*#__PURE__*/React.createElement("span", { className: "nav-count" }, cuenta) : null,
          sub ? /*#__PURE__*/React.createElement("span", { className: "nav-flecha" }, "\u203A") : null),
       abierto && /*#__PURE__*/React.createElement("div", { className: "nav-sub" },
-        /*#__PURE__*/React.createElement("button", {
-          type: "button",
-          className: `nav-subitem ${!sel[m.id] ? 'active' : ''}`,
-          onClick: () => { elegir(m.id, ''); cerrarSiChico(); }
-        }, "Ver todos"),
         sub.map(s => /*#__PURE__*/React.createElement("button", {
-          key: s.id,
+          key: s.key,
           type: "button",
           title: s.label,
-          className: `nav-subitem ${sel[m.id] === s.id ? 'active' : ''}`,
-          onClick: () => { elegir(m.id, s.id); cerrarSiChico(); }
+          className: `nav-subitem ${s.activo ? 'active' : ''} ${s.especial ? 'especial' : ''}`,
+          onClick: s.onClick
         }, s.alerta ? /*#__PURE__*/React.createElement("span", { className: "punto-alerta" }) : null,
            /*#__PURE__*/React.createElement("span", { className: "nav-subitem-txt" }, s.label)))));
   }), /*#__PURE__*/React.createElement(RespaldoBloque, null)), /*#__PURE__*/React.createElement("main", {
