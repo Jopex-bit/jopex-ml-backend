@@ -205,6 +205,10 @@ module.exports = (app) => {
       // para Flex (self_service), Full es mayormente envío al interior.
       if (out.tipo === 'flex') {
         const localidad = ra && ra.city ? ra.city.name : null;
+        // Para que el panel clasifique la zona con su tabla de códigos postales.
+        out.localidad = localidad;
+        out.cp = ra && ra.zip_code ? ra.zip_code : null;
+        out.barrio = ra && ra.neighborhood ? ra.neighborhood.name || null : null;
         const zona = zonaNovaflex(out.provincia, localidad);
         if (zona) {
           out.zona_novaflex = zona;
@@ -217,6 +221,9 @@ module.exports = (app) => {
       const senders = (c.data && c.data.senders) || [];
       const yo = senders.find(s => String(s.user_id) === String(ctx.uid)) || senders[0];
       out.vendedor = yo && yo.cost != null ? Number(yo.cost) : null;
+      // Bonificación por envío que acredita ML (senders[].save). En Flex el "cost" de
+      // arriba es el valor de lista de la zona, NO un cobro: lo que se paga es la mensajería.
+      if (out.tipo === 'flex') out.bonificacion = yo && yo.save != null ? Number(yo.save) || 0 : 0;
       out.comprador = c.data && c.data.receiver && c.data.receiver.cost != null ? Number(c.data.receiver.cost) : null;
     } catch (e) { /* sin costos: queda null y el panel lo marca como sin dato */ }
     return out;
@@ -344,7 +351,7 @@ module.exports = (app) => {
         // el resto del envío sea válido, o la zona queda sin clasificar para
         // siempre con datos viejos.
         const zonaOk = vieja && vieja.envio && vieja.envio.tipo === 'flex'
-          ? vieja.envio.zona_novaflex !== undefined : true;
+          ? vieja.envio.zona_novaflex !== undefined && vieja.envio.bonificacion !== undefined && vieja.envio.cp !== undefined : true;
         const reusar = vieja && vieja.envio && vieja.envio.ok && vieja.envio_id === o.envio_id && zonaOk &&
           (vieja.envio.vendedor != null || o.dia < limiteRefresco);
         if (reusar) o.envio = vieja.envio;

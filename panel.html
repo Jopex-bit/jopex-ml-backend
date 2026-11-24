@@ -7030,8 +7030,22 @@ function dashFijos(desde, hasta) {
 }
 
 // Suma de las órdenes de un rango de días (solo pagadas; las canceladas se cuentan aparte).
+// Costo real de un envío Flex de una orden del Dashboard (misma regla que Inicio > Costos de envío).
+function dashCostoFlex(o, cpZonas, manual) {
+  const e = o.envio || {};
+  const z = envZona({ envio_id: o.envio_id, provincia: e.provincia, cp: e.cp, localidad: e.localidad, barrio: e.barrio }, cpZonas || {}, manual || {});
+  let tarifa = NOVAFLEX_TARIFAS[z.zona];
+  // Órdenes viejas en cache sin CP/localidad: usamos la zona que ya había calculado el servidor.
+  if (tarifa == null && e.zona_novaflex && e.zona_novaflex.zona) { z.zona = e.zona_novaflex.zona; tarifa = NOVAFLEX_TARIFAS[z.zona]; }
+  if (tarifa == null) return { costo: null, zona: z.zona, mensajeria: null, credito: 0 };
+  const credito = (Number(e.comprador) || 0) + (Number(e.bonificacion) || 0);
+  const mensajeria = tarifa + NOVAFLEX_EMPAQUETADO;
+  return { costo: mensajeria - credito, zona: z.zona, mensajeria, credito };
+}
 function dashAgregar(ordenes, desde, hasta, costoDe) {
   const t = { ventas: 0, unidades: 0, fact: 0, com: 0, env: 0, cmv: 0, sinCosto: 0, canceladas: 0, envSinDato: 0 };
+  const cpZonas = envLeer('jopex_envios_cp_zonas', {});
+  const manual = envLeer('jopex_envios_zona_manual', {});
   (ordenes || []).forEach(o => {
     if (o.dia < desde || o.dia > hasta) return;
     if (o.estado === 'cancelled') { t.canceladas++; return; }
@@ -7044,7 +7058,12 @@ function dashAgregar(ordenes, desde, hasta, costoDe) {
       const c = costoDe(it);
       if (c == null) t.sinCosto += it.cant; else t.cmv += c * it.cant;
     });
-    if (o.envio && o.envio.vendedor != null) t.env += o.envio.vendedor;
+    if (o.envio && o.envio.tipo === 'flex') {
+      // Flex: ML no cobra envío. El costo real es la mensajería (tarifa de la zona + empaquetado)
+      // menos lo que acredita ML (bonificación, o lo que pagó el comprador por el envío).
+      const cf = dashCostoFlex(o, cpZonas, manual);
+      if (cf.costo != null) t.env += cf.costo; else t.envSinDato++;
+    } else if (o.envio && o.envio.vendedor != null) t.env += o.envio.vendedor;
     else if (o.envio_id) t.envSinDato++;
   });
   t.ingresoNeto = t.fact - t.com - t.env;
@@ -7233,6 +7252,8 @@ function DashboardPanel({ productosCosto, seleccion, irA, titulo }) {
   const cuotas = {};
   let recurrentes = 0;
   const novaflex = { zonas: {}, total: 0, sinClasificar: 0, fueraDeAlcance: 0 };
+  const cpZonasNf = envLeer('jopex_envios_cp_zonas', {});
+  const manualNf = envLeer('jopex_envios_zona_manual', {});
   pagadas.forEach(o => {
     const tipo = o.envio && o.envio.tipo;
     if (tipo === 'full') canal.full++; else if (tipo === 'flex') canal.flex++; else if (tipo) canal.propio++; else canal.sinDato++;
@@ -7243,13 +7264,13 @@ function DashboardPanel({ productosCosto, seleccion, irA, titulo }) {
     cuotas[c] = (cuotas[c] || 0) + 1;
     if (o.recurrente) recurrentes++;
     if (tipo === 'flex') {
-      const zn = o.envio.zona_novaflex;
-      if (zn && zn.zona) {
-        if (!novaflex.zonas[zn.zona]) novaflex.zonas[zn.zona] = { cantidad: 0, costo: 0 };
-        novaflex.zonas[zn.zona].cantidad++;
-        novaflex.zonas[zn.zona].costo += o.envio.costo_novaflex_estimado || 0;
-        novaflex.total += o.envio.costo_novaflex_estimado || 0;
-      } else if (zn && zn.fueraDeAlcance) novaflex.fueraDeAlcance++;
+      const cf = dashCostoFlex(o, cpZonasNf, manualNf);
+      if (cf.mensajeria != null) {
+        if (!novaflex.zonas[cf.zona]) novaflex.zonas[cf.zona] = { cantidad: 0, costo: 0 };
+        novaflex.zonas[cf.zona].cantidad++;
+        novaflex.zonas[cf.zona].costo += cf.mensajeria;
+        novaflex.total += cf.mensajeria;
+      } else if (cf.zona === 'Fuera de cobertura') novaflex.fueraDeAlcance++;
       else novaflex.sinClasificar++;
     }
   });
