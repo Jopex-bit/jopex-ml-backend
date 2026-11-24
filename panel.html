@@ -512,7 +512,7 @@ const MODULES = [{
 //   Investigación: + Calculadora rápida (misma cascada de landed cost)
 //   Costos:        + Precios Tienda Nube (sale del costo de Costos)
 //   Ads:           + Resultados por período (ex Dashboard > Publicidad)
-const GRUPO_DE_PANTALLA = { hoy: 'inicio', dashboard: 'inicio', calculadora: 'investigacion', tiendanube: 'costos', ads_resultados: 'ads' };
+const GRUPO_DE_PANTALLA = { hoy: 'inicio', dashboard: 'inicio', envios: 'inicio', calculadora: 'investigacion', tiendanube: 'costos', ads_resultados: 'ads' };
 const grupoDe = pantalla => GRUPO_DE_PANTALLA[pantalla] || pantalla;
 // Al tocar el título de un grupo, la pantalla que se abre.
 const PANTALLA_INICIAL_DE = { inicio: 'hoy' };
@@ -534,6 +534,7 @@ const MODULE_DESC = {
   investigacion: 'Cotizaciones de proveedores por producto candidato: landed cost estimado antes de comprar, comparando varias ofertas a la vez.',
   stock: 'Modelo Min-Max con cobertura: D, L, SS, Mínimo y Máximo calculados de tu historial real de ventas y envíos. Alerta cuando el Total Disponible cae debajo del Mínimo.',
   tiendanube: 'Precio sugerido y margen real por producto en tu tienda Tiendanube, según la pasarela de pago (Pago Nube o Mercado Pago). El costo del producto sale de Costos.',
+  envios: 'Control de lo que cobra la mensajería Flex (Novaflex): cada envío entregado con su zona, tarifa y empaquetado, agrupado por semana para cotejar sus liquidaciones. Debajo, lo que te acredita Mercado Libre por esos envíos.',
   calculadora: 'Costo landed estimado de un producto, al toque — misma cascada que Investigación (Seguro, Derecho, Tasa Estadística, IVA), con el tipo de cambio USDT de Belo. Independiente: no se guarda ni se manda a ningún otro módulo.'
 };
 
@@ -7471,6 +7472,278 @@ function DashboardPanel({ productosCosto, seleccion, irA, titulo }) {
         h('div', { key: i, className: 'muted', style: { fontSize: 12 } }, d.paso + ' · ' + (d.status || 's/estado') + ' · ' + d.detalle)))));
 }
 
+// ---------- Costos de envío: control de Flex (Novaflex) ----------
+// Lista cada envío Flex con su dirección de entrega, lo clasifica en la zona de
+// Novaflex y calcula lo que hay que pagarle (tarifa de la zona + empaquetado),
+// agrupado por semana para cotejar con sus liquidaciones semanales. Debajo, lo
+// que acredita Mercado Libre por esos envíos (bonificación o envío pagado por el
+// comprador), para saber cuánto se recupera.
+// Zona: 1) la que asignaste a mano, 2) CABA por provincia o CP 1000-1499,
+// 3) la tabla de códigos postales (se completa sola con cada envío clasificado
+// y la podés cargar entera con la lista de Novaflex), 4) el nombre de la
+// localidad/partido según el PDF de tarifas de Novaflex.
+const NOVAFLEX_TARIFAS = { 'CABA': 4300, 'Cordón 1': 4500, 'Cordón 2': 6300, 'Cordón 3': 8300 };
+const NOVAFLEX_EMPAQUETADO = 1500;
+const NOVAFLEX_ZONAS = ['CABA', 'Cordón 1', 'Cordón 2', 'Cordón 3'];
+// Partidos/localidades por zona (PDF de Novaflex) + localidades conocidas de cada partido.
+const NOVAFLEX_NOMBRES = {
+  'Cordón 1': ['vicente lopez', 'san isidro', 'san martin', 'general san martin', 'tres de febrero',
+    'hurlingham', 'ituzaingo', 'moron', 'ramos mejia', 'lomas del mirador', 'villa luzuriaga',
+    'san justo', 'la tablada', 'villa madero', 'tapiales', 'aldo bonzi', 'lomas de zamora',
+    'lanus', 'avellaneda',
+    'olivos', 'florida', 'munro', 'carapachay', 'villa martelli', 'la lucila',
+    'martinez', 'beccar', 'boulogne', 'acassuso',
+    'villa ballester', 'san andres', 'villa lynch', 'jose leon suarez', 'billinghurst',
+    'caseros', 'ciudadela', 'santos lugares', 'saenz pena', 'el palomar', 'martin coronado', 'ciudad jardin',
+    'castelar', 'haedo', 'villa sarmiento', 'william morris', 'villa tesei',
+    'banfield', 'temperley', 'turdera', 'llavallol', 'remedios de escalada', 'valentin alsina', 'monte chingolo',
+    'wilde', 'sarandi', 'dock sud', 'villa dominico'],
+  'Cordón 2': ['villa celina', 'ciudad de evita', 'isidro casanova', 'rafael castillo',
+    'gonzalez catan', 'laferrere', 'virrey del pino', '20 de junio', 'san fernando',
+    'san miguel', 'malvinas argentinas', 'jose c paz', 'moreno', 'merlo', 'esteban echeverria',
+    'almirante brown', 'quilmes', 'florencio varela', 'berazategui', 'ezeiza',
+    'francisco alvarez', 'paso del rey', 'la reja', 'trujui', 'cuartel v',
+    'padua', 'libertad', 'pontevedra', 'mariano acosta',
+    'victoria', 'virreyes',
+    'bella vista', 'muniz', 'grand bourg', 'los polvorines', 'tortuguitas', 'pablo nogues', 'villa de mayo',
+    'adrogue', 'burzaco', 'longchamps', 'claypole', 'glew', 'rafael calzada', 'jose marmol',
+    'bernal', 'ezpeleta', 'don bosco', 'monte grande', 'luis guillon', 'el jaguel', '9 de abril',
+    'tristan suarez', 'ranelagh', 'hudson', 'platanos', 'bosques', 'zeballos'],
+  'Cordón 3': ['zarate', 'campana', 'cardales', 'escobar', 'pilar', 'tigre', 'lujan',
+    'general rodriguez', 'marcos paz', 'canuelas', 'san vicente', 'presidente peron',
+    'la plata', 'ensenada', 'berisso', 'del viso', 'derqui', 'garin', 'guernica',
+    'ing maschwitz', 'ingeniero maschwitz', 'nordelta', 'villa rosa',
+    'don torcuato', 'general pacheco', 'benavidez', 'el talar', 'rincon de milberg',
+    'manuel alberti', 'city bell', 'gonnet', 'tolosa', 'los hornos', 'villa elisa']
+};
+function envNorm(s) {
+  return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function envCp(cp) { const d = String(cp || '').replace(/\D/g, ''); return d.length >= 4 ? d.slice(0, 4) : ''; }
+function envZonaPorNombre(...textos) {
+  const t = textos.map(envNorm).filter(Boolean);
+  if (!t.length) return null;
+  // Primero coincidencia exacta, después "contiene" (evita que un nombre corto pise a uno largo).
+  for (const z of ['Cordón 3', 'Cordón 2', 'Cordón 1']) if (NOVAFLEX_NOMBRES[z].some(n => t.includes(n))) return z;
+  for (const z of ['Cordón 3', 'Cordón 2', 'Cordón 1']) if (NOVAFLEX_NOMBRES[z].some(n => t.some(x => x.includes(n)))) return z;
+  return null;
+}
+function envZona(e, cpZonas, manual) {
+  const sid = String(e.envio_id);
+  if (manual[sid]) return { zona: manual[sid], fuente: 'Manual' };
+  const prov = envNorm(e.provincia);
+  const cp = envCp(e.cp);
+  const cpN = Number(cp);
+  if (prov === 'capital federal' || (cpN >= 1000 && cpN <= 1499)) return { zona: 'CABA', fuente: cp ? 'CP' : 'Provincia' };
+  if (cp && cpZonas[cp]) return { zona: cpZonas[cp], fuente: 'Tabla CP' };
+  if (prov && prov !== 'buenos aires') return { zona: 'Fuera de cobertura', fuente: 'Provincia' };
+  const z = envZonaPorNombre(e.localidad, e.barrio);
+  if (z) return { zona: z, fuente: 'Localidad' };
+  return { zona: null, fuente: 'Sin clasificar' };
+}
+// Lo que acredita Mercado Libre por el envío.
+function envCredito(e) {
+  if (Number(e.costo_comprador) > 0) return { monto: Number(e.costo_comprador), concepto: 'Envío pagado por el comprador', dato: 'informado por ML' };
+  if (e.bonificacion_informada != null && Number(e.bonificacion_informada) > 0) return { monto: Number(e.bonificacion_informada), concepto: 'Bonificación por envío', dato: 'informado por ML' };
+  if (e.bonificacion_informada == null && Number(e.costo_vendedor_lista) > 0) return { monto: Math.round(Number(e.costo_vendedor_lista) / 9), concepto: 'Bonificación por envío', dato: 'estimado (10% de la zona ML)' };
+  return { monto: 0, concepto: 'Sin crédito', dato: '' };
+}
+const ENV_ESTADOS = {
+  delivered: 'Entregado', shipped: 'En camino', ready_to_ship: 'Por despachar', handling: 'Preparando',
+  pending: 'Pendiente', not_delivered: 'No entregado', cancelled: 'Cancelado'
+};
+function envLunes(iso) {
+  const d = new Date(iso + 'T12:00:00Z');
+  const dow = (d.getUTCDay() + 6) % 7; // 0 = lunes
+  d.setUTCDate(d.getUTCDate() - dow);
+  return d.toISOString().slice(0, 10);
+}
+function envSumar(iso, n) { const d = new Date(iso + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+const envDM = iso => iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) : '—';
+const envLeer = (k, def) => { try { const s = window.localStorage.getItem(k); return s ? JSON.parse(s) : def; } catch (e) { return def; } };
+let enviosCache = null;
+
+function CostosEnvioPanel() {
+  const h = React.createElement;
+  const [desde, setDesde] = React.useState(() => envLeer('jopex_envios_desde', '2026-11-03'));
+  const [data, setData] = React.useState(enviosCache);
+  const [cargando, setCargando] = React.useState(false);
+  const [error, setError] = React.useState('');
+  const [cpZonas, setCpZonas] = React.useState(() => envLeer('jopex_envios_cp_zonas', {}));
+  const [manual, setManual] = React.useState(() => envLeer('jopex_envios_zona_manual', {}));
+  const [verTabla, setVerTabla] = React.useState(false);
+  const [pegado, setPegado] = React.useState('');
+  React.useEffect(() => { try { window.localStorage.setItem('jopex_envios_desde', JSON.stringify(desde)); } catch (e) {} }, [desde]);
+  React.useEffect(() => { try { window.localStorage.setItem('jopex_envios_cp_zonas', JSON.stringify(cpZonas)); } catch (e) {} }, [cpZonas]);
+  React.useEffect(() => { try { window.localStorage.setItem('jopex_envios_zona_manual', JSON.stringify(manual)); } catch (e) {} }, [manual]);
+
+  const cargar = async () => {
+    const cfg = leerCfgBackend();
+    if (!cfg.url) { setError('Falta configurar la URL del backend (módulo Investigación).'); return; }
+    setCargando(true); setError('');
+    try {
+      const resp = await fetch(cfg.url.replace(/\/+$/, '') + '/api/envios-flex?desde=' + desde, { headers: cfg.key ? { 'x-api-key': cfg.key } : {} });
+      const txt = await resp.text();
+      let j; try { j = JSON.parse(txt); } catch (e) { j = { error: txt.slice(0, 300) }; }
+      if (!resp.ok) throw new Error((j.error || ('HTTP ' + resp.status)) + (j.detalle ? ' (' + (typeof j.detalle === 'string' ? j.detalle : JSON.stringify(j.detalle).slice(0, 200)) + ')' : ''));
+      enviosCache = j; setData(j);
+    } catch (e) { setError(e.message); } finally { setCargando(false); }
+  };
+  React.useEffect(() => { if (!enviosCache || enviosCache.desde !== desde) cargar(); }, [desde]);
+
+  const envios = (data && data.envios) || [];
+  const filas = envios.map(e => {
+    const z = envZona(e, cpZonas, manual);
+    const tarifa = NOVAFLEX_TARIFAS[z.zona];
+    return { e, ...z, tarifa: tarifa != null ? tarifa : null, total: tarifa != null ? tarifa + NOVAFLEX_EMPAQUETADO : null, credito: envCredito(e) };
+  });
+
+  // Aprende la tabla de CP con cada envío clasificado por localidad o a mano.
+  React.useEffect(() => {
+    const nuevos = {};
+    filas.forEach(f => {
+      const cp = envCp(f.e.cp);
+      if (!cp || Number(cp) < 1500 || cpZonas[cp]) return;
+      if ((f.fuente === 'Localidad' || f.fuente === 'Manual') && NOVAFLEX_TARIFAS[f.zona] != null) nuevos[cp] = f.zona;
+    });
+    if (Object.keys(nuevos).length) setCpZonas(p => ({ ...nuevos, ...p }));
+  }, [data, manual]);
+
+  const asignar = (f, zona) => {
+    const sid = String(f.e.envio_id);
+    setManual(p => { const n = { ...p }; if (zona) n[sid] = zona; else delete n[sid]; return n; });
+    const cp = envCp(f.e.cp);
+    if (zona && cp && Number(cp) >= 1500 && NOVAFLEX_TARIFAS[zona] != null) setCpZonas(p => ({ ...p, [cp]: zona }));
+  };
+
+  const entregados = filas.filter(f => f.e.estado === 'delivered').sort((a, b) => String(a.e.dia_entrega).localeCompare(String(b.e.dia_entrega)));
+  const otros = filas.filter(f => f.e.estado !== 'delivered');
+  const sinZona = entregados.filter(f => f.total == null);
+  const aPagar = entregados.reduce((t, f) => t + (f.total || 0), 0);
+  const acreditado = entregados.reduce((t, f) => t + f.credito.monto, 0);
+  const neto = aPagar - acreditado;
+  const conZona = entregados.filter(f => f.total != null).length;
+
+  // Semanas de lunes a domingo, por fecha de entrega.
+  const semanas = [];
+  entregados.forEach(f => {
+    const l = envLunes(f.e.dia_entrega || f.e.dia_venta);
+    let s = semanas.find(x => x.lunes === l);
+    if (!s) { s = { lunes: l, filas: [] }; semanas.push(s); }
+    s.filas.push(f);
+  });
+  semanas.sort((a, b) => a.lunes.localeCompare(b.lunes));
+
+  const linkVenta = e => h('a', { href: 'https://www.mercadolibre.com.ar/ventas/' + (e.pack || e.ordenes[0]) + '/detalle', target: '_blank', rel: 'noopener noreferrer' }, '#' + (e.pack || e.ordenes[0]));
+  const selZona = f => h('select', {
+    value: manual[String(f.e.envio_id)] || '', className: 'env-sel' + (f.zona ? '' : ' env-sel-falta'),
+    title: 'Asignar la zona a mano (también la guarda para ese código postal)',
+    onChange: ev => asignar(f, ev.target.value)
+  }, h('option', { value: '' }, f.zona && f.fuente !== 'Manual' ? f.zona + ' (auto)' : (f.zona || 'Elegir…')),
+    NOVAFLEX_ZONAS.map(z => h('option', { key: z, value: z }, z)));
+  const kpi = (label, valor, sub, color) => h('div', { className: 'kpi-card kpi-' + color },
+    h('div', { className: 'kpi-label' }, label), h('div', { className: 'kpi-value' }, valor), sub != null && h('div', { className: 'kpi-sub' }, sub));
+  const bloque = (titulo, ...hijos) => h('section', { className: 'hoy-bloque' }, h('div', { className: 'hoy-bloque-head' }, h('h2', null, titulo)), ...hijos);
+
+  const tablaPagar = h('div', { className: 'table-scroll' }, h('table', { className: 'env-tabla' },
+    h('thead', null, h('tr', null, ['Entrega', 'Venta', 'Localidad', 'CP', 'Zona', 'Dato', 'Tarifa', 'Empaquetado', 'A pagar'].map(c => h('th', { key: c }, c)))),
+    h('tbody', null, semanas.flatMap(s => {
+      const sub = s.filas.reduce((t, f) => t + (f.total || 0), 0);
+      const faltan = s.filas.filter(f => f.total == null).length;
+      return [
+        ...s.filas.map(f => h('tr', { key: f.e.envio_id, className: f.total == null ? 'env-falta' : '' },
+          h('td', null, envDM(f.e.dia_entrega)),
+          h('td', null, linkVenta(f.e)),
+          h('td', null, (f.e.localidad || '—') + (f.e.barrio && envNorm(f.e.barrio) !== envNorm(f.e.localidad) ? ' · ' + f.e.barrio : '')),
+          h('td', null, envCp(f.e.cp) || '—'),
+          h('td', null, selZona(f)),
+          h('td', { className: 'muted' }, f.fuente),
+          h('td', { className: 'num' }, f.tarifa != null ? money(f.tarifa) : '—'),
+          h('td', { className: 'num' }, f.total != null ? money(NOVAFLEX_EMPAQUETADO) : '—'),
+          h('td', { className: 'num' }, f.total != null ? h('strong', null, money(f.total)) : 'falta zona'))),
+        h('tr', { key: 'sem' + s.lunes, className: 'env-subtotal' },
+          h('td', { colSpan: 6 }, 'Semana del ' + envDM(s.lunes) + ' al ' + envDM(envSumar(s.lunes, 6)) + ' · ' + s.filas.length + ' envío(s)' + (faltan ? ' · ' + faltan + ' sin zona' : '')),
+          h('td', { colSpan: 2 }, ''),
+          h('td', { className: 'num' }, money(sub)))
+      ];
+    }), entregados.length > 0 && h('tr', { className: 'env-total' },
+      h('td', { colSpan: 6 }, 'Total a pagar a Novaflex · ' + conZona + ' envío(s)'),
+      h('td', { colSpan: 2 }, ''),
+      h('td', { className: 'num' }, money(aPagar))))));
+
+  const tablaCredito = h('div', { className: 'table-scroll' }, h('table', { className: 'env-tabla' },
+    h('thead', null, h('tr', null, ['Entrega', 'Venta', 'Precio de venta', 'Concepto', 'Dato', 'Acreditado'].map(c => h('th', { key: c }, c)))),
+    h('tbody', null, entregados.map(f => h('tr', { key: 'c' + f.e.envio_id },
+      h('td', null, envDM(f.e.dia_entrega)),
+      h('td', null, linkVenta(f.e)),
+      h('td', { className: 'num' }, money(f.e.monto)),
+      h('td', null, f.credito.concepto),
+      h('td', { className: 'muted' }, f.credito.dato),
+      h('td', { className: 'num' }, money(f.credito.monto)))),
+    entregados.length > 0 && h('tr', { className: 'env-total' },
+      h('td', { colSpan: 5 }, 'Total acreditado por Mercado Libre'),
+      h('td', { className: 'num' }, money(acreditado))))));
+
+  const tablaOtros = otros.length > 0 && h('div', { className: 'table-scroll' }, h('table', { className: 'env-tabla' },
+    h('thead', null, h('tr', null, ['Venta', 'Fecha de venta', 'Estado', 'Localidad', 'Zona', 'Tarifa + empaquetado'].map(c => h('th', { key: c }, c)))),
+    h('tbody', null, otros.map(f => h('tr', { key: 'o' + f.e.envio_id },
+      h('td', null, linkVenta(f.e)),
+      h('td', null, envDM(f.e.dia_venta)),
+      h('td', null, ENV_ESTADOS[f.e.estado] || f.e.estado || '—'),
+      h('td', null, f.e.localidad || '—'),
+      h('td', null, f.zona || '—'),
+      h('td', { className: 'num' }, f.total != null ? money(f.total) : '—'))))));
+
+  const cpLista = Object.keys(cpZonas).sort();
+  const importar = () => {
+    const nuevos = {};
+    pegado.split(/\n+/).forEach(l => {
+      const cp = envCp((l.match(/\d{4}/) || [''])[0]);
+      const t = envNorm(l.replace(/\d{4}/, ''));
+      let zona = null;
+      if (/caba|capital/.test(t)) zona = 'CABA';
+      else { const m = t.match(/([123])\s*$/) || t.match(/cordon\s*([123])/); if (m) zona = 'Cordón ' + m[1]; }
+      if (cp && zona) nuevos[cp] = zona;
+    });
+    if (Object.keys(nuevos).length) { setCpZonas(p => ({ ...p, ...nuevos })); setPegado(''); }
+  };
+
+  return h('div', { className: 'module-panel hoy-panel' },
+    h('div', { className: 'module-header' }, h('h1', null, 'Costos de envío'), h('p', null, MODULE_DESC.envios)),
+    h('div', { className: 'hoy-barra' },
+      h('div', { className: 'env-desde' }, h('label', null, 'Desde ', h('input', { type: 'date', value: desde, onChange: ev => ev.target.value && setDesde(ev.target.value) }))),
+      h('div', { className: 'dash-acciones' },
+        data && h('span', { className: 'muted dash-actualizado' }, 'Actualizado ' + fechaHoraCorta(data.generado_en)),
+        h('button', { type: 'button', className: 'add-btn sync-btn', disabled: cargando, onClick: cargar }, cargando ? 'Actualizando…' : 'Actualizar'))),
+    error && h('div', { className: 'competencia-error' }, error),
+    h('div', { className: 'data-note' }, 'Tarifas Novaflex: ' + NOVAFLEX_ZONAS.map(z => z + ' ' + money(NOVAFLEX_TARIFAS[z])).join(' · ') + ' · + empaquetado ' + money(NOVAFLEX_EMPAQUETADO) + ' por envío. Se cuentan los envíos entregados, agrupados por semana (lunes a domingo) según la fecha de entrega.'),
+    !data && !error && h('div', { className: 'sub-empty' }, cargando ? 'Trayendo tus envíos Flex de Mercado Libre…' : 'Sin datos todavía.'),
+    data && h('div', { className: 'kpi-row dash-kpis' },
+      kpi('Envíos Flex entregados', String(entregados.length), otros.length ? otros.length + ' más en curso o cancelados' : 'desde el ' + envDM(desde), 'blue'),
+      kpi('A pagar a Novaflex', money(aPagar), sinZona.length ? sinZona.length + ' envío(s) sin zona: asignala abajo' : 'tarifa + empaquetado', sinZona.length ? 'red' : 'amber'),
+      kpi('Acreditado por Mercado Libre', money(acreditado), aPagar > 0 ? 'recuperás el ' + pct(acreditado / aPagar * 100) : null, 'green'),
+      kpi('Costo neto de envíos', money(neto), conZona ? 'promedio ' + money(Math.round(neto / Math.max(1, entregados.length))) + ' por envío' : null, 'blue')),
+    data && bloque('Lo que tenés que pagarle a Novaflex', entregados.length ? tablaPagar : h('div', { className: 'sub-empty' }, 'No hay envíos Flex entregados en el período.')),
+    data && bloque('Lo que te acredita Mercado Libre', entregados.length ? tablaCredito : h('div', { className: 'sub-empty' }, 'Sin envíos entregados.'),
+      h('p', { className: 'lineas-hint' }, 'Montos que informa Mercado Libre por cada envío: en ventas con envío gratis, la "Bonificación por envío" (hoy el 10% del valor de la zona); en ventas por debajo del umbral, lo que pagó el comprador por el envío, que ML te acredita. Tocá el número de venta para ver el detalle en Mercado Libre.')),
+    data && otros.length > 0 && bloque('En curso, no entregados o cancelados (todavía no se suman)', tablaOtros),
+    data && h('section', { className: 'hoy-bloque' },
+      h('div', { className: 'hoy-bloque-head', style: { cursor: 'pointer' }, onClick: () => setVerTabla(v => !v) },
+        h('h2', null, (verTabla ? '▾ ' : '▸ ') + 'Tabla de códigos postales (' + cpLista.length + ')')),
+      verTabla && h('div', null,
+        h('p', { className: 'lineas-hint' }, 'Cada código postal clasificado queda guardado acá y las próximas ventas con ese CP toman esta zona. CABA (CP 1000 a 1499) no hace falta cargarla. Para cargar la lista de Novaflex, pegá una línea por CP, por ejemplo "1884 Cordón 2" o "1640;1".'),
+        h('textarea', { className: 'env-pegar', rows: 4, value: pegado, placeholder: '1884 Cordón 2\n1640;1', onChange: ev => setPegado(ev.target.value) }),
+        h('button', { type: 'button', className: 'add-btn', onClick: importar, disabled: !pegado.trim() }, 'Cargar a la tabla'),
+        cpLista.length > 0 && h('div', { className: 'table-scroll' }, h('table', { className: 'env-tabla env-tabla-cp' },
+          h('thead', null, h('tr', null, h('th', null, 'CP'), h('th', null, 'Zona'), h('th', null, ''))),
+          h('tbody', null, cpLista.map(cp => h('tr', { key: cp },
+            h('td', null, cp),
+            h('td', null, h('select', { value: cpZonas[cp], className: 'env-sel', onChange: ev => setCpZonas(p => ({ ...p, [cp]: ev.target.value })) },
+              NOVAFLEX_ZONAS.map(z => h('option', { key: z, value: z }, z)))),
+            h('td', null, h('button', { type: 'button', className: 'add-btn ghost-btn', onClick: () => setCpZonas(p => { const n = { ...p }; delete n[cp]; return n; }) }, 'Quitar'))))))))));
+}
+
 function ModulePanel({
   moduleId,
   productos,
@@ -7541,6 +7814,7 @@ function ModulePanel({
     adsCfg: adsCfg, setAdsCfg: setAdsCfg, irA: irA
   });
   if (moduleId === 'calculadora') return /*#__PURE__*/React.createElement(CalculadoraRapidaPanel, null);
+  if (moduleId === 'envios') return /*#__PURE__*/React.createElement(CostosEnvioPanel, null);
   return /*#__PURE__*/React.createElement(GenericModulePanel, {
     moduleId: moduleId
   });
@@ -7569,7 +7843,10 @@ const CLAVES_RESPALDO = [
   'jopex_tiendanube_cfg',
   'jopex_calc_rapida',
   'jopex_tc_belo',
-  'jopex_calc_rapida_precio'
+  'jopex_calc_rapida_precio',
+  'jopex_envios_cp_zonas',
+  'jopex_envios_zona_manual',
+  'jopex_envios_desde'
 ];
 
 // ---------------------------------------------------------------------------
@@ -7995,10 +8272,10 @@ function JopexPanel() {
   const subDe = g => {
     if (g === 'inicio') return [
       { key: 'hoy', label: 'Para hacer hoy', activo: active === 'hoy', onClick: () => irPantalla('hoy') },
-      ...DASH_SECCIONES.filter(s => s.id !== 'publicidad').map(s => ({
+      ...DASH_SECCIONES.filter(s => s.id !== 'publicidad').flatMap(s => [{
         key: s.id, label: s.label, activo: active === 'dashboard' && sel.dashboard === s.id,
         onClick: () => irPantalla('dashboard', 'dashboard', s.id)
-      })),
+      }].concat(s.id === 'ventas' ? [{ key: '__envios', label: 'Costos de envío', activo: active === 'envios', onClick: () => irPantalla('envios') }] : [])),
       { key: '__tablero', label: 'Tablero completo', activo: active === 'dashboard' && !sel.dashboard, onClick: () => irPantalla('dashboard', 'dashboard', '') }
     ];
     if (g === 'investigacion') return [
@@ -8955,6 +9232,16 @@ function JopexPanel() {
         }
         .add-btn:hover { background: rgba(61, 220, 60, 0.2); }
         .table-scroll { overflow-x: auto; }
+        .env-tabla td.num, .env-tabla th:last-child { text-align: right; white-space: nowrap; }
+        .env-tabla tr.env-subtotal td { font-weight: 700; color: var(--text-secondary); border-top: 1px solid var(--border-soft); background: rgba(255,255,255,0.03); }
+        .env-tabla tr.env-total td { font-weight: 800; color: var(--lime); border-top: 2px solid var(--border-soft); }
+        .env-tabla tr.env-falta td { background: rgba(255, 77, 94, 0.08); }
+        .env-tabla a { color: var(--blue-glow); text-decoration: none; }
+        .env-sel { background: #111; color: var(--text-primary); border: 1px solid var(--border-soft); border-radius: 6px; padding: 2px 4px; font-size: 12px; }
+        .env-sel-falta { border-color: var(--red-glow); }
+        .env-desde input { background: #111; color: var(--text-primary); border: 1px solid var(--border-soft); border-radius: 6px; padding: 4px 6px; margin-left: 6px; }
+        .env-pegar { width: 100%; background: #111; color: var(--text-primary); border: 1px solid var(--border-soft); border-radius: 8px; padding: 8px; font-family: inherit; margin-bottom: 8px; }
+        .env-tabla-cp { max-width: 420px; }
         table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
         th {
           text-align: left;

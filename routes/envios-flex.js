@@ -25,7 +25,7 @@ const axios = require('axios');
 // ---------------------------------------------------------------------------
 
 const CLAVE_CACHE = 'jopex_envios_flex_cache';
-const VERSION_CACHE = 1;
+const VERSION_CACHE = 2;
 const FINALES = ['delivered', 'cancelled', 'not_delivered'];
 const esFecha = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
 const TZ_AR = 'America/Argentina/Buenos_Aires';
@@ -114,6 +114,7 @@ module.exports = (app) => {
               costo_comprador: null,
               costo_vendedor_lista: null,
               bonificacion_informada: null,
+              cargo_flex: null,
             };
             try {
               const c = (await axios.get(`${API}/shipments/${sid}/costs`, { ...auth, timeout: 10000 })).data || {};
@@ -121,9 +122,13 @@ module.exports = (app) => {
               const yo = senders.find(x => String(x.user_id) === String(uid)) || senders[0] || {};
               env.costo_vendedor_lista = yo.cost != null ? Number(yo.cost) : null;
               env.costo_comprador = c.receiver && c.receiver.cost != null ? Number(c.receiver.cost) : null;
-              // Si Mercado Libre informa la compensación al vendedor, la tomamos tal cual.
-              const comp = yo.compensation != null ? yo.compensation : (yo.compensations != null ? yo.compensations : null);
-              if (comp != null && !isNaN(Number(comp))) env.bonificacion_informada = Number(comp);
+              // La "Bonificación por envío" del detalle de venta viene como senders[].save
+              // (= suma de discounts[].promoted_amount; verificado: save 699 = 10% de 6.990).
+              const desc = (yo.discounts || []).reduce((t, d) => t + (Number(d.promoted_amount) || 0), 0);
+              const save = yo.save != null && !isNaN(Number(yo.save)) ? Number(yo.save) : desc;
+              env.bonificacion_informada = save || 0;
+              // Cargo Flex que pudiera cobrar ML (hoy viene en 0).
+              env.cargo_flex = yo.charges && yo.charges.charge_flex != null ? Number(yo.charges.charge_flex) : null;
               if (crudo) env.crudo_costos = c;
             } catch (e) {
               diagnostico.push({ envio: sid, paso: 'costs', status: e.response ? e.response.status : null });
