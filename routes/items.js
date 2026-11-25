@@ -1,5 +1,6 @@
 const express = require('express');
 const axios = require('axios');
+const { multigetItems } = require('../ml-items');
 
 module.exports = (app) => {
   const router = express.Router();
@@ -42,13 +43,11 @@ module.exports = (app) => {
       for (let i = 0; i < ids.length; i += 20) chunks.push(ids.slice(i, i + 20));
 
       const items = [];
+      const no_leidas = [];
       for (const chunk of chunks) {
-        const detalle = await axios.get(`${app.locals.ML_API}/items`, {
-          headers: { Authorization: `Bearer ${token}` },
-          params: { ids: chunk.join(',') },
-        });
-        detalle.data.forEach((d) => {
-          if (d.code !== 200) return;
+        const detalle = await multigetItems(app.locals.ML_API, { headers: { Authorization: `Bearer ${token}` } }, chunk);
+        detalle.forEach((d) => {
+          if (d.code !== 200) { no_leidas.push({ id: d.body && d.body.id, status: d.code, motivo: d.body && d.body.message }); return; }
           const b = d.body;
           const tieneVariaciones = Array.isArray(b.variations) && b.variations.length > 0;
           items.push({
@@ -74,7 +73,7 @@ module.exports = (app) => {
         });
       }
 
-      res.json({ items });
+      res.json({ items, no_leidas });
     } catch (err) {
       console.error(err.response?.data || err.message);
       res.status(500).json({ error: 'No se pudieron obtener las publicaciones.', detalle: err.response?.data || err.message });

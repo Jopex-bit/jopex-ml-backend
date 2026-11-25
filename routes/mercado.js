@@ -1,5 +1,6 @@
 const express = require('express');
 const axios = require('axios');
+const { multigetItems } = require('../ml-items');
 
 // ---------------------------------------------------------------------------
 // RADAR DE MERCADO v2 — investigación de oportunidades
@@ -605,8 +606,8 @@ module.exports = (app) => {
       const detalles = {};
       for (let i = 0; i < ids.length; i += 20) {
         try {
-          const d = await axios.get(`${API}/items`, { ...auth, params: { ids: ids.slice(i, i + 20).join(',') } });
-          d.data.forEach((x) => { if (x.code === 200 && x.body) detalles[x.body.id] = x.body; });
+          const d = await multigetItems(API, auth, ids.slice(i, i + 20));
+          d.forEach((x) => { if (x.code === 200 && x.body) detalles[x.body.id] = x.body; });
         } catch (e) { /* seguimos con lo que haya */ }
       }
       // Los puestos de tipo PRODUCT son fichas de catálogo: traemos su ganador.

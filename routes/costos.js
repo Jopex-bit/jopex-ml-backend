@@ -1,5 +1,6 @@
 const express = require('express');
 const axios = require('axios');
+const { multigetItems } = require('../ml-items');
 
 // ---------------------------------------------------------------------------
 // GET /api/costos
@@ -63,11 +64,8 @@ module.exports = (app) => {
       // ---- 2) Detalle de las publicaciones (multiget de a 20) ----
       const detalles = [];
       for (let i = 0; i < ids.length; i += 20) {
-        const r = await axios.get(`${API}/items`, {
-          ...auth,
-          params: { ids: ids.slice(i, i + 20).join(',') },
-        });
-        r.data.forEach((d) => {
+        const lote = await multigetItems(API, auth, ids.slice(i, i + 20));
+        lote.forEach((d) => {
           if (d.code === 200 && d.body) detalles.push(d.body);
         });
       }

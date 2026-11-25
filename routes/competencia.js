@@ -1,5 +1,6 @@
 const express = require('express');
 const axios = require('axios');
+const { multigetItems } = require('../ml-items');
 
 // ---------------------------------------------------------------------------
 // GET /api/competencia?urls=<link1>,<link2>,...
@@ -120,11 +121,8 @@ module.exports = (app) => {
       const detalles = [];
       for (let i = 0; i < ids.length; i += 20) {
         const chunk = ids.slice(i, i + 20);
-        const resp = await axios.get(`${API}/items`, {
-          ...auth,
-          params: { ids: chunk.join(',') },
-        });
-        resp.data.forEach((d) => detalles.push(d));
+        const lote = await multigetItems(API, auth, chunk);
+        lote.forEach((d) => detalles.push(d));
       }
 
       // --- Paso 3: reviews (estrellas y cantidad de opiniones).
