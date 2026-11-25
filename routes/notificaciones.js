@@ -164,6 +164,13 @@ module.exports = (app) => {
     if (n.topic !== 'orders_v2' || !m) return;
     const ordenId = m[1];
 
+    // Stock compartido de las familias de SKU: se recalcula con cualquier cambio de la orden
+    // (venta, cancelación). Corre aparte: no depende de que la venta sea Flex ni del aviso.
+    if (app.locals.familiaStock) {
+      app.locals.familiaStock.alNotificar(ordenId).catch(e =>
+        console.error('[familia-stock] orden', ordenId, e.response?.data || e.message));
+    }
+
     const r = await evaluarOrden(ordenId);
     if (!r.avisar) { console.log(`[notif] orden ${ordenId}: sin aviso (${r.motivo})`); return; }
 

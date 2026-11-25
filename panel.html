@@ -4609,6 +4609,71 @@ function UbicacionesStock({ seleccionado, famSel, setCampo }) {
 
 // ---------- Stock: en tránsito (importación, reposición a FULL/Flex, devoluciones) ----------
 function hoyLocalIso() { const d = new Date(); const z = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate()); }
+// ---------- Stock publicado en Mercado Libre para una familia de SKU ----------
+// Todos los SKU de despacho propio de la familia publican el stock del depósito Flex (pack x2 = la
+// mitad, pack x3 = un tercio). El backend lo recalcula y lo aplica después de cada venta si la
+// familia está activada acá (clave jopex_familias_stock_cfg, se guarda en el servidor con el panel).
+function StockFamiliaML({ famSel, flexLocal }) {
+  const h = React.createElement;
+  const nombre = famSel.nombre;
+  const [cfgs, setCfgs] = useState(() => { try { return JSON.parse(window.localStorage.getItem('jopex_familias_stock_cfg') || '{}'); } catch (e) { return {}; } });
+  const cfg = cfgs[nombre] || { activo: false, margen: 0 };
+  const setCfg = (k, v) => setCfgs(prev => {
+    const n = { ...prev, [nombre]: { ...(prev[nombre] || { activo: false, margen: 0 }), [k]: v } };
+    try { window.localStorage.setItem('jopex_familias_stock_cfg', JSON.stringify(n)); } catch (e) {}
+    return n;
+  });
+  const [prev, setPrev] = useState(null);
+  const [ultimo, setUltimo] = useState(null);
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState('');
+  const [confirmar, setConfirmar] = useState(false);
+  const pedir = async (ruta) => {
+    const c = leerCfgBackend();
+    const r = await fetch(c.url.replace(/\/+$/, '') + ruta, { headers: c.key ? { 'x-api-key': c.key } : {} });
+    const t = await r.text(); let j; try { j = JSON.parse(t); } catch (e) { j = { error: t.slice(0, 200) }; }
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    return j;
+  };
+  React.useEffect(() => { pedir('/api/familia-stock/ultimo').then(j => setUltimo(j[nombre] || null)).catch(() => {}); }, [nombre]);
+  const correr = async (aplicar) => {
+    setCargando(true); setError(''); setConfirmar(false);
+    try {
+      const j = await pedir('/api/familia-stock?familia=' + encodeURIComponent(nombre) + (aplicar ? '&aplicar=1' : ''));
+      setPrev(j); if (aplicar) setUltimo(j);
+    } catch (e) { setError(e.message); } finally { setCargando(false); }
+  };
+  const mostrar = prev || ultimo;
+  const aCambiar = prev ? prev.publicaciones.filter(x => x.accion === 'cambiaría').length : 0;
+  return h('div', { className: 'table-section fam-ml' },
+    h('div', { className: 'table-section-header' }, h('h2', null, 'Stock publicado en Mercado Libre'),
+      h('span', { className: 'muted' }, 'Flex en el panel: ' + flexLocal + ' u')),
+    h('div', { className: 'sub-empty', style: { margin: '0 16px 8px' } },
+      'Los SKU de despacho propio de la familia publican el stock del depósito Flex (pack x2 = la mitad, pack x3 = un tercio). Los de FULL no se tocan.'),
+    h('div', { className: 'repo-form' },
+      h('label', { className: 'fam-check' }, h('input', { type: 'checkbox', checked: !!cfg.activo, onChange: ev => setCfg('activo', ev.target.checked) }), ' Actualizar automático después de cada venta'),
+      h('label', null, 'Margen de seguridad (u)', h('input', { type: 'number', min: 0, value: cfg.margen || 0, onChange: ev => setCfg('margen', Math.max(0, Number(ev.target.value) || 0)) })),
+      h('button', { type: 'button', className: 'add-btn ghost-btn', disabled: cargando, onClick: () => correr(false) }, cargando ? 'Calculando…' : 'Ver qué se publicaría'),
+      prev && aCambiar > 0 && !confirmar && h('button', { type: 'button', className: 'add-btn', disabled: cargando, onClick: () => setConfirmar(true) }, 'Igualar ahora'),
+      confirmar && h('button', { type: 'button', className: 'add-btn', disabled: cargando, onClick: () => correr(true) }, 'Confirmar: actualizar ' + aCambiar + ' publicación(es) en Mercado Libre'),
+      confirmar && h('button', { type: 'button', className: 'add-btn ghost-btn', onClick: () => setConfirmar(false) }, 'Cancelar')),
+    error && h('div', { className: 'competencia-error', style: { margin: '0 16px 8px' } }, error),
+    mostrar && h('div', { className: 'sub-empty', style: { margin: '0 16px 8px' } },
+      (mostrar.aplicado ? 'Última actualización ' + fechaHoraCorta(mostrar.generado_en) + ' (' + mostrar.motivo + '). ' : 'Vista previa. ') +
+      'Flex: ' + (mostrar.flex.fecha_conteo ? 'conteo ' + mostrar.flex.conteo + ' u del ' + mostrar.flex.fecha_conteo + ', ' : '') +
+      (mostrar.flex.envios_y_devoluciones >= 0 ? '+' : '') + mostrar.flex.envios_y_devoluciones + ' u envíos/devoluciones, −' + mostrar.flex.ventas_flex + ' u vendidas = ' + mostrar.flex.real + ' u' +
+      (mostrar.flex.margen ? ' − margen ' + mostrar.flex.margen : '') + ' → se publican ' + mostrar.flex.publicado + ' u.'),
+    mostrar && h('div', { className: 'table-scroll' }, h('table', null,
+      h('thead', null, h('tr', null, ['SKU', 'Publicación', 'Logística', 'En ML', 'Queda', ''].map(c => h('th', { key: c }, c)))),
+      h('tbody', null, mostrar.publicaciones.map(x => h('tr', { key: x.item },
+        h('td', null, x.sku + (x.factor > 1 ? ' (x' + x.factor + ')' : '')),
+        h('td', null, h('a', { href: 'https://articulo.mercadolibre.com.ar/' + x.item.replace('MLA', 'MLA-'), target: '_blank', rel: 'noreferrer', className: 'link-btn' }, x.item)),
+        h('td', null, x.logistica === 'fulfillment' ? 'FULL' : (x.logistica || '—')),
+        h('td', null, x.actual == null ? '—' : x.actual),
+        h('td', null, x.objetivo == null ? '—' : x.objetivo),
+        h('td', { className: x.error ? 'hoy-mal' : 'muted' }, x.accion + (x.error ? ': ' + x.error : ''))))))));
+}
+
 function TransitoStock({ p, r, updateEnvio, updateMovFlex, famSel, addReposicion, updateMovFull, removeMovFull }) {
   const h = React.createElement;
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
@@ -5143,6 +5208,7 @@ function StockPanel({
   solapa === 'transito' ? h(TransitoStock, { p: seleccionado, r: rSeleccionado, updateEnvio, updateMovFlex, famSel, addReposicion, updateMovFull, removeMovFull }) : React.createElement(React.Fragment, null,
   
   h(UbicacionesStock, { seleccionado, famSel, setCampo }),
+  famSel && h(StockFamiliaML, { famSel, flexLocal: calcularUbicacionesStock(famSel.virtual).flexStock }),
   rSeleccionado ? /*#__PURE__*/React.createElement("div", {
     className: "kpi-row"
   }, /*#__PURE__*/React.createElement("div", {
@@ -7955,7 +8021,8 @@ const CLAVES_RESPALDO = [
   'jopex_calc_rapida_precio',
   'jopex_envios_cp_zonas',
   'jopex_envios_zona_manual',
-  'jopex_envios_desde'
+  'jopex_envios_desde',
+  'jopex_familias_stock_cfg'
 ];
 
 // ---------------------------------------------------------------------------
@@ -9344,6 +9411,8 @@ function JopexPanel() {
         .repo-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 0 16px 12px; }
         .repo-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--text-secondary); }
         .repo-form input, .repo-form select { background: #111; color: var(--text-primary); border: 1px solid var(--border-soft); border-radius: 6px; padding: 5px 7px; font-size: 13px; min-width: 110px; }
+        .fam-check { flex-direction: row !important; align-items: center; gap: 6px !important; color: var(--text-primary) !important; font-size: 13px !important; }
+        .fam-check input { min-width: 0 !important; }
         .repo-aviso { flex-basis: 100%; font-size: 12px; color: var(--amber-glow); }
         .env-tabla td.num, .env-tabla th:last-child { text-align: right; white-space: nowrap; }
         .env-tabla tr.env-subtotal td { font-weight: 700; color: var(--text-secondary); border-top: 1px solid var(--border-soft); background: rgba(255,255,255,0.03); }
