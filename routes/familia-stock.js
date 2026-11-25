@@ -150,13 +150,27 @@ module.exports = (app) => {
     }
 
     if (aplicar) {
+      // Las publicaciones de un mismo SKU comparten el stock en ML (verificado: al actualizar una,
+      // cambian sus hermanas, y actualizarlas a la vez da 409 conflict). Se actualiza UNA por SKU.
+      const hechos = {};
+      const espera = ms => new Promise(r => setTimeout(r, ms));
       for (const f of publicaciones.filter(x => x.accion === 'actualizar')) {
-        try {
-          await axios.put(`${c.API}/items/${f.item}`, { available_quantity: f.objetivo }, c.auth);
-          f.accion = 'actualizado';
-        } catch (e) {
-          f.accion = 'error al actualizar';
-          f.error = (e.response && e.response.data && (e.response.data.message || JSON.stringify(e.response.data.cause || ''))) || e.message;
+        const clave = (f.sku || f.item) + '|' + f.objetivo;
+        if (hechos[clave]) { f.accion = 'actualizado (comparte stock con ' + hechos[clave] + ')'; continue; }
+        for (let intento = 1; intento <= 3; intento++) {
+          try {
+            await axios.put(`${c.API}/items/${f.item}`, { available_quantity: f.objetivo }, c.auth);
+            f.accion = 'actualizado';
+            delete f.error;
+            hechos[clave] = f.item;
+            break;
+          } catch (e) {
+            const st = e.response && e.response.status;
+            f.accion = 'error al actualizar';
+            f.error = (e.response && e.response.data && (e.response.data.message || JSON.stringify(e.response.data.cause || ''))) || e.message;
+            if (st !== 409 || intento === 3) break;
+            await espera(2000 * intento); // conflicto: otra actualización en curso, se reintenta
+          }
         }
       }
     }
