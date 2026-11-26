@@ -960,15 +960,55 @@ const pct = n => n === '' || n == null || isNaN(n) ? '—' : `${Number(n).toLoca
 //   Costo del Producto= Valor de Adquisición
 //   Recibo por venta  = Precio − Comisión ML − Financiamiento − Envío − Costo Producto
 //   Ganancia s/Costo  = Recibo por venta / Valor de Adquisición
-// ---------- Cargo fijo por unidad vendida (Mercado Libre Argentina) ----------
-// ML cobra un importe FIJO por unidad además del porcentaje de comisión, y solo
-// en productos por debajo de cierto precio. Tabla relevada del simulador oficial:
-const TRAMOS_CARGO_FIJO = [
-  { desde: 0,     hasta: 15999,    fijo: 1265 },
-  { desde: 16000, hasta: 23999,    fijo: 2490 },
-  { desde: 24000, hasta: 32999,    fijo: 2950 },
-  { desde: 33000, hasta: Infinity, fijo: 0 }
+// ---------- Costos de Mercado Libre Argentina (vigentes desde el 01/09/2026) ----------
+// Fuente: tablas de ML publicadas por algoritmodigital.com.ar (la ayuda oficial 42402/43522 no
+// se puede leer sin sesión), verificadas el 26/11/2026 contra la cuenta: cargo fijo medido con
+// listing_prices a $12k/15k/20k/25k/30k, envío del Bare Vanilla a $38.999 ($6.790), del guante a
+// $40k/$50k ($8.290/$8.790) y de un collar Full a $56.198 ($6.790). Se revisan cada mes.
+const COSTOS_ML_VIGENCIA = '01/09/2026';
+const UMBRAL_ENVIO_GRATIS = 33000;
+// Cargo fijo por unidad vendida: solo debajo de $33.000. Depende del precio y del PESO del paquete
+// (el mayor entre el real y el volumétrico). Filas: [hasta kg, hasta $14.999, $15.000–23.999, $24.000–32.999].
+const TRAMOS_PRECIO_FIJO = [{ desde: 0, hasta: 14999 }, { desde: 15000, hasta: 23999 }, { desde: 24000, hasta: 32999 }];
+const CARGO_FIJO_POR_PESO = [
+  [0.3, 1330, 2740, 3320], [0.5, 1370, 2760, 3340], [1, 1390, 2780, 3360], [1.5, 1410, 2800, 3380],
+  [2, 1430, 2820, 3400], [3, 1450, 2860, 3470], [4, 1470, 2910, 3520], [5, 1500, 3040, 3670],
+  [8, 1520, 3130, 3760], [10, 1560, 3180, 3910], [13, 1590, 3220, 4020], [15, 1620, 3280, 4060],
+  [20, 1640, 3320, 4100], [25, 1660, 3380, 4170], [30, 1680, 3410, 4210], [40, 1700, 3440, 4250],
+  [50, 1720, 3460, 4300], [60, 1740, 3480, 4320], [70, 1760, 3510, 4350], [80, 1780, 3530, 4370],
+  [90, 1800, 3560, 4400], [100, 1820, 3580, 4420], [120, 1840, 3600, 4450], [140, 1860, 3620, 4470],
+  [160, 1880, 3650, 4500], [180, 1900, 3680, 4520], [Infinity, 1920, 3700, 4550]
 ];
+// Flex, acordar con el comprador y retiro: cargo plano por precio, NO depende del peso.
+const CARGO_FIJO_FLEX = [1330, 2740, 3320];
+// Envío gratis a cargo del vendedor (reputación verde / MercadoLíder / sin reputación).
+// Filas: [hasta kg, debajo de $33.000 (si lo ofrecés), $33.000–49.999, desde $50.000].
+const ENVIO_GRATIS_ML = [
+  [0.3, 8666, 6190, 6790], [0.5, 9506, 6790, 7290], [1, 10906, 7790, 8290], [1.5, 11186, 7990, 8590],
+  [2, 11606, 8290, 8790], [3, 12446, 8890, 9590], [4, 13706, 9790, 10890], [5, 15106, 10790, 11890],
+  [8, 16506, 11790, 13090], [10, 17906, 12790, 14190], [13, 19306, 13790, 15190], [15, 20706, 14790, 16290],
+  [20, 24626, 17590, 19390], [25, 29246, 20890, 23390], [30, 40026, 28590, 32090], [40, 45626, 32590, 36990],
+  [50, 48146, 34390, 39090], [60, 53326, 38090, 43590], [70, 55426, 39590, 45490], [80, 64106, 45790, 52690],
+  [90, 78946, 56390, 65190], [100, 90986, 64990, 75090], [120, 99246, 70890, 81990], [140, 111706, 79790, 92290],
+  [160, 124166, 88690, 102690], [180, 136486, 97490, 112990], [Infinity, 148946, 106390, 123290]
+];
+const pesoDe = p => { const n = Number(p && p.pesoKg); return n > 0 ? n : 0; };
+const esFlexCosto = p => !!p && p.logistica === 'self_service';
+// Tramos de cargo fijo para un producto (según su peso; sin peso cargado = hasta 0,3 kg).
+function tramosCargoFijo(p) {
+  const peso = pesoDe(p);
+  const fila = esFlexCosto(p) || !peso ? null : CARGO_FIJO_POR_PESO.find(f => peso <= f[0]);
+  const montos = fila ? fila.slice(1) : CARGO_FIJO_FLEX;
+  return TRAMOS_PRECIO_FIJO.map((t, i) => ({ ...t, fijo: montos[i] })).concat([{ desde: UMBRAL_ENVIO_GRATIS, hasta: Infinity, fijo: 0 }]);
+}
+// Envío gratis que cobra ML a ese precio y peso (null debajo de $33.000: ahí lo paga el comprador).
+function envioSugeridoML(precio, p) {
+  if (!(precio > 0) || precio < UMBRAL_ENVIO_GRATIS) return null;
+  const peso = pesoDe(p) || 0.3;
+  const fila = ENVIO_GRATIS_ML.find(f => peso <= f[0]);
+  return precio < 50000 ? fila[2] : fila[3];
+}
+const TRAMOS_CARGO_FIJO = tramosCargoFijo(null);
 // ---------- Costo de financiación por cantidad de cuotas ----------
 // La API de ML (financing_add_on_fee) devuelve un solo % sin decir a qué plan
 // de cuotas corresponde. En vez de adivinar, el usuario mantiene esta tabla
@@ -976,22 +1016,23 @@ const TRAMOS_CARGO_FIJO = [
 // 3 y 6 cuotas: lo que cobra Mercado Libre (verificado en su pantalla de promociones: 8,5% y 12,9%).
 // 9 y 12 cuotas: sin dato verificado todavía, se dejan como estaban.
 const TASAS_CUOTAS_DEFAULT = { '3': 8.50, '6': 12.90, '9': 17.80, '12': 21.60 };
-function cargoFijoDe(precio) {
-  const t = TRAMOS_CARGO_FIJO.find(t => precio >= t.desde && precio <= t.hasta);
+function cargoFijoDe(precio, p) {
+  const t = tramosCargoFijo(p).find(t => precio >= t.desde && precio <= t.hasta);
   return t ? t.fijo : 0;
 }
 // El cargo fijo depende del precio, y el precio es lo que estamos despejando:
 // probamos tramo por tramo y nos quedamos con el que da un precio coherente con
 // su propio rango. Si ningún tramo cierra (hay un hueco justo antes de $33.000),
 // lo resolvemos en el piso del tramo sin cargo fijo: ahí el margen es MAYOR.
-function resolverPrecio(base, coef) {
-  for (const t of TRAMOS_CARGO_FIJO) {
+function resolverPrecio(base, coef, p) {
+  const tramos = tramosCargoFijo(p);
+  for (const t of tramos) {
     const precio = (base + t.fijo) / coef;
     if (precio >= t.desde && precio <= t.hasta) {
       return { precio, cargoFijo: t.fijo, salto: false };
     }
   }
-  const sinFijo = TRAMOS_CARGO_FIJO[TRAMOS_CARGO_FIJO.length - 1];
+  const sinFijo = tramos[tramos.length - 1];
   return { precio: sinFijo.desde, cargoFijo: 0, salto: true };
 }
 
@@ -1012,7 +1053,7 @@ function calcularCosto(p, tasasCuotas) {
     error: 'La suma de %cargo + %financiamiento + %margen supera el 100% — el precio no puede resolverse.'
   };
 
-  const sol = resolverPrecio(subtotal, coeficiente);
+  const sol = resolverPrecio(subtotal, coeficiente, p);
   const precio = sol.precio;
   const cargoFijo = sol.cargoFijo;
 
@@ -1034,7 +1075,7 @@ function calcularCosto(p, tasasCuotas) {
   // en $33.000 y el margen que te queda es mayor al que pediste.
   const avisoSalto = sol.salto
     ? 'No hay precio que cierre con el cargo fijo: a $32.999 pagarías ' +
-      money(2950) + ' fijo. Se resolvió en ' + money(precio) +
+      money(cargoFijoDe(32999, p)) + ' fijo. Se resolvió en ' + money(precio) +
       ', el piso sin cargo fijo, donde el margen real sube a ' + margenReal.toFixed(1) + '%.'
     : null;
 
@@ -1045,7 +1086,7 @@ function calcularCosto(p, tasasCuotas) {
   let promo = null;
   if (!isNaN(promoPct) && promoPct > 0) {
     const precioFinal = precio * (1 - promoPct / 100);
-    const cargoFijoPromo = cargoFijoDe(precioFinal);
+    const cargoFijoPromo = cargoFijoDe(precioFinal, p);
     const comisionMLPromo = precioFinal * (cargo / 100) + cargoFijoPromo;
     const financiamientoARSPromo = precioFinal * (fin / 100);
     const recibisML = precioFinal - comisionMLPromo - financiamientoARSPromo - envioCliente;
@@ -1528,7 +1569,7 @@ function margenConPrecio(precio, p, costo, tasasCuotas) {
   const cu = p.cuotas || '6';
   const finPct = cu === 'sin' ? 0 : (Number((tasasCuotas || TASAS_CUOTAS_DEFAULT)[cu]) || 0);
   const envio = Number(p.envioML) || 0;
-  const fijo = cargoFijoDe(precio);
+  const fijo = cargoFijoDe(precio, p);
   const comVar = precio * (Number(p.cargoVenta) || 0) / 100;
   const fin = precio * finPct / 100;
   const deposito = precio - comVar - fijo - fin - envio;
@@ -1593,7 +1634,7 @@ function PrecioManualBloque({ p, r, tasasCuotas, onUpdate, tcBelo }) {
   const finPct = (p.cuotas || '6') === 'sin' ? 0 : (Number((tasasCuotas || TASAS_CUOTAS_DEFAULT)[p.cuotas || '6']) || 0);
   let m = null;
   if (hay) {
-    const fijo = cargoFijoDe(pm);
+    const fijo = cargoFijoDe(pm, p);
     const comVar = pm * cargoPct / 100;
     const fin = pm * finPct / 100;
     const envio = r.envioCliente;
@@ -1633,6 +1674,22 @@ function PrecioManualBloque({ p, r, tasasCuotas, onUpdate, tcBelo }) {
 // El costo, el envío, el % de cargo y el margen deseado se cargan una sola vez y se escriben en todas
 // las publicaciones del SKU. Debajo, una fila por condición de venta con el precio sugerido, el precio
 // publicado en Mercado Libre y lo que queda de margen real en cada caso.
+// Sugerencia de envío según la tabla de ML (para productos sin publicación sincronizada, donde el
+// envío no lo trae Mercado Libre): toma el precio manual o el publicado y el peso del paquete.
+function SugerenciaEnvio({ p, onUsar }) {
+  const h = React.createElement;
+  if (!p || p.mlItemId) return null;
+  const precio = Number(p.precioManual) || Number(p.precioML) || 0;
+  if (!precio) return h('div', { className: 'lineas-hint' }, 'Cargá un precio de venta para sugerirte el envío según la tabla de Mercado Libre.');
+  const sug = envioSugeridoML(precio, p);
+  const pesoTxt = pesoDe(p) ? pesoDe(p) + ' kg' : 'hasta 0,3 kg (sin peso cargado)';
+  if (sug == null) return h('div', { className: 'lineas-hint' }, 'A ' + money(precio) + ' (debajo de ' + money(UMBRAL_ENVIO_GRATIS) + ') el envío lo paga el comprador: en envío común es $0 para vos. En Flex, poné lo que te cobra la mensajería menos lo que te acredita ML.');
+  return h('div', { className: 'lineas-hint' },
+    'Tabla ML (' + COSTOS_ML_VIGENCIA + '): envío gratis a ' + money(precio) + ', ' + pesoTxt + ' → ' + money(sug) + ' (envío común, reputación verde). ',
+    h('button', { type: 'button', className: 'link-btn', onClick: () => onUsar(String(sug)) }, 'Usar ' + money(sug)),
+    ' En Flex, en cambio, ML no cobra envío: va lo que cobra la mensajería menos la bonificación.');
+}
+
 function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate, tasasCuotas, onUpdateTasa, tcBelo, cotizaciones, stockProductos, familias, tamFamilia, onCopiarFamilia }) {
   const h = React.createElement;
   const [abierta, setAbierta] = useState('');
@@ -1640,7 +1697,7 @@ function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate
   const llena = v => v !== '' && v != null && !(Array.isArray(v) && !v.length);
   const prim = g.miembros.reduce((acc, m) => {
     if (!acc) return { ...m };
-    ['valorAdquisicion', 'componentes', 'envioML', 'cargoVenta', 'mgUtilidad', 'mgMinimo'].forEach(c => { if (!llena(acc[c]) && llena(m[c])) acc[c] = m[c]; });
+    ['valorAdquisicion', 'componentes', 'envioML', 'cargoVenta', 'mgUtilidad', 'mgMinimo', 'pesoKg'].forEach(c => { if (!llena(acc[c]) && llena(m[c])) acc[c] = m[c]; });
     return acc;
   }, null);
   const ids = g.miembros.map(m => m.mlItemId).filter(Boolean);
@@ -1705,6 +1762,8 @@ function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate
           (loteCosto.costo.definitivo ? 'costo definitivo' : 'costo estimado') +
           (loteCosto.agotado ? ' · lote agotado, falta cargar el siguiente' : '')),
         h(CampoInput, { label: 'Costo Envío ML', prefix: '$', value: prim.envioML, onChange: v => onUpdateGrupo('envioML', v) }),
+        h(CampoInput, { label: 'Peso del paquete (kg) — define el cargo fijo de ML', prefix: 'kg', value: prim.pesoKg == null ? '' : prim.pesoKg, onChange: v => onUpdateGrupo('pesoKg', v) }),
+        h(SugerenciaEnvio, { p: prim, onUsar: v => onUpdateGrupo('envioML', v) }),
         difiere('envioML') && h('div', { className: 'data-note', style: { marginBottom: 0 } }, 'El envío difiere entre las publicaciones de este SKU (se pisa con el valor que cargues acá).')),
       h('div', { className: 'costo-block' },
         h('h4', null, 'Cargos de MELI y Mg. Utilidad'),
@@ -1885,7 +1944,12 @@ function ProductoCostoCard({
     prefix: "$",
     value: p.envioML,
     onChange: v => onUpdate(p.id, 'envioML', v)
-  })), /*#__PURE__*/React.createElement("div", {
+  }), React.createElement(CampoInput, {
+    label: "Peso del paquete (kg) — define el cargo fijo de ML",
+    prefix: "kg",
+    value: p.pesoKg == null ? '' : p.pesoKg,
+    onChange: v => onUpdate(p.id, 'pesoKg', v)
+  }), React.createElement(SugerenciaEnvio, { p: p, onUsar: v => onUpdate(p.id, 'envioML', v) })), /*#__PURE__*/React.createElement("div", {
     className: "costo-block"
   }, /*#__PURE__*/React.createElement("h4", null, "Cargos de MELI y Mg. Utilidad"), /*#__PURE__*/React.createElement(CampoInput, {
     label: "% Cargo por venta",
@@ -1945,7 +2009,7 @@ function ProductoCostoCard({
   }, r.cargoFijo > 0
     ? 'Tramo con cargo fijo: a ' + money(r.precio) + ' Mercado Libre suma ' + money(r.cargoFijo) +
       ' por unidad además del ' + p.cargoVenta + '% de comisión.'
-    : 'Sin cargo fijo: arriba de ' + money(33000) + ' Mercado Libre solo cobra el ' + p.cargoVenta + '% de comisión.'),
+    : 'Sin cargo fijo: desde ' + money(UMBRAL_ENVIO_GRATIS) + ' Mercado Libre solo cobra el ' + p.cargoVenta + '% de comisión.'),
   r.avisoSalto && /*#__PURE__*/React.createElement("div", {
     className: "aviso-salto"
   }, r.avisoSalto), /*#__PURE__*/React.createElement("div", {
@@ -2260,7 +2324,7 @@ async function traerCostosML(cfg, productos) {
         // Las publicaciones nuevas de un SKU que ya tiene costo cargado heredan lo compartido
         // (costo, componentes y margen deseado) de su hermana; solo se completan campos vacíos.
         const vacio = v => v === '' || v == null || (Array.isArray(v) && !v.length);
-        const COMPARTIDOS = ['valorAdquisicion', 'componentes', 'mgUtilidad', 'mgMinimo', 'familia'];
+        const COMPARTIDOS = ['valorAdquisicion', 'componentes', 'mgUtilidad', 'mgMinimo', 'familia', 'pesoKg'];
         const donantes = {};
         copia.forEach(p => {
           const k = skuClave(p);
@@ -6696,7 +6760,7 @@ function CalculadoraRapidaPanel() {
     const finPct = fp.cuotas === 'sin' ? 0 : (Number(tasasCuotas[fp.cuotas]) || 0);
     const envio = Number(fp.envioML) || 0;
     const costo = rp.costoProductoARS;
-    const fijo = cargoFijoDe(pm);
+    const fijo = cargoFijoDe(pm, fp);
     const comVar = pm * cargoPct / 100;
     const fin = pm * finPct / 100;
     const deposito = pm - comVar - fijo - fin - envio;
@@ -6749,7 +6813,7 @@ function CalculadoraRapidaPanel() {
     const cargoPct = Number(fp.cargoVenta) || 0;
     const finPct = fp.cuotas === 'sin' ? 0 : (Number(tasasCuotas[fp.cuotas]) || 0);
     const envio = Number(fp.envioML) || 0;
-    const fijo = cargoFijoDe(pm);
+    const fijo = cargoFijoDe(pm, fp);
     const comVar = pm * cargoPct / 100;
     const fin = pm * finPct / 100;
     const margenObjetivo = pm * mgPctObjetivo / 100;
@@ -6893,7 +6957,7 @@ function CalculadoraRapidaPanel() {
         rp.cargoFijo > 0
           ? 'Tramo con cargo fijo: a ' + money(rp.precio) + ' Mercado Libre suma ' + money(rp.cargoFijo) +
             ' por unidad además del ' + fp.cargoVenta + '% de comisión.'
-          : 'Sin cargo fijo: arriba de ' + money(33000) + ' Mercado Libre solo cobra el ' + fp.cargoVenta + '% de comisión.'),
+          : 'Sin cargo fijo: desde ' + money(UMBRAL_ENVIO_GRATIS) + ' Mercado Libre solo cobra el ' + fp.cargoVenta + '% de comisión.'),
       rp.avisoSalto && h('div', { className: 'aviso-salto' }, rp.avisoSalto),
       h('div', { className: 'costo-out-grid' },
         h(CampoCalculado, { label: 'Comisión variable (' + fp.cargoVenta + '%)', value: money(rp.comisionML - rp.cargoFijo) }),
