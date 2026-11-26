@@ -216,6 +216,19 @@ module.exports = (app) => {
     }
   });
 
+  // Mensaje libre al Telegram de JOPEX (lo usa la tarea mensual en la nube que revisa los
+  // costos de Mercado Libre). Body: { "texto": "..." }. Va en texto plano, escapado.
+  api.post('/mensaje', async (req, res) => {
+    const texto = String((req.body && req.body.texto) || '').trim();
+    if (!texto) return res.status(400).json({ error: 'Falta "texto".' });
+    try {
+      await enviarTelegram(esc(texto.slice(0, 3800)));
+      res.json({ ok: true, enviado_a: chatIds().length });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   api.get('/test', async (req, res) => {
     try {
       await enviarTelegram('✅ <b>JOPEX</b>: las notificaciones de ventas Flex están funcionando.');
