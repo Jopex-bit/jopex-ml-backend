@@ -422,6 +422,37 @@ module.exports = (app) => {
     }
   });
 
+  // POST /api/costos/quitar-oferta   { item: 'MLA...', promotion_type: 'LIGHTNING', promotion_id: 'LGH-...', offer_ids: ['118...'] }
+  // Saca la publicación de una promoción de ML (una llamada por tanda/oferta; sin offer_ids, una sola).
+  // Devuelve el resultado de cada baja tal como responde ML.
+  router.post('/quitar-oferta', express.json(), async (req, res) => {
+    try {
+      const token = await app.locals.getAccessTokenValido();
+      const API = app.locals.ML_API;
+      const auth = { headers: { Authorization: `Bearer ${token}` } };
+      const item = String(req.body?.item || '').toUpperCase();
+      const tipo = String(req.body?.promotion_type || '').toUpperCase();
+      const promo = String(req.body?.promotion_id || '');
+      if (!/^MLA\d+$/.test(item) || !/^[A-Z_]+$/.test(tipo)) return res.status(400).json({ error: 'Faltan item y promotion_type.' });
+      const ofertas = Array.isArray(req.body?.offer_ids) && req.body.offer_ids.length ? req.body.offer_ids.map(String).filter((x) => /^\d+$/.test(x)) : [null];
+      const resultados = [];
+      for (const offer of ofertas) {
+        const params = { promotion_type: tipo, app_version: 'v2' };
+        if (promo) params.promotion_id = promo;
+        if (offer) params.offer_id = offer;
+        try {
+          const r = await axios.delete(`${API}/seller-promotions/items/${item}`, { ...auth, params, timeout: 15000 });
+          resultados.push({ offer_id: offer, ok: true, status: r.status, respuesta: r.data });
+        } catch (e) {
+          resultados.push({ offer_id: offer, ok: false, status: e.response?.status, error: e.response?.data || e.message });
+        }
+      }
+      res.json({ item, promotion_type: tipo, promotion_id: promo, resultados });
+    } catch (err) {
+      res.status(500).json({ error: 'No se pudo quitar la oferta.', detalle: err.response?.data || err.message });
+    }
+  });
+
   // GET /api/costos/pago?order=2000...   (diagnóstico, solo lectura)
   // Muestra el pago de una orden tal como lo devuelven ML y Mercado Pago, para ubicar
   // dónde viene la retención de Ingresos Brutos que figura en el detalle de la venta.
