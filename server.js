@@ -202,6 +202,8 @@ app.use('/api/dashboard', requireApiKey, require('./routes/dashboard')(app));
 app.use('/api/envios-flex', requireApiKey, require('./routes/envios-flex')(app));
 // Radar de mercado: investigación de oportunidades de producto.
 app.use('/api/mercado', requireApiKey, require('./routes/mercado')(app));
+// Brand Central: habilitación y cupo para sugerir productos al catálogo (solo lectura).
+app.use('/api/brand-central', requireApiKey, require('./routes/brand-central')(app));
 // Avisos por Telegram de ventas Flex: webhook público de ML + rutas de configuración.
 // Stock publicado de las familias de SKU (se recalcula después de cada venta, ver familia-stock.js).
 const familiaStock = require('./routes/familia-stock')(app);
