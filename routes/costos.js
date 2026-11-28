@@ -21,6 +21,7 @@ const { multigetItems } = require('../ml-items');
 // Parámetros opcionales:
 //   ?limit=50   cuántas publicaciones traer (por defecto 50)
 //   ?item=MLA1  analizar una sola publicación
+//   ?items=MLA1,MLA2  analizar solo esas publicaciones (las de un SKU)
 //   ?debug=1    agrega promos_raw: las promociones tal como las devuelve ML (para diagnóstico)
 // ---------------------------------------------------------------------------
 
@@ -50,7 +51,10 @@ module.exports = (app) => {
 
       // ---- 1) Qué publicaciones analizar ----
       let ids;
-      if (req.query.item) {
+      if (req.query.items) {
+        // Varias publicaciones puntuales (las de un SKU), separadas por coma.
+        ids = Array.from(new Set(String(req.query.items).toUpperCase().split(',').map((x) => x.trim()).filter((x) => /^MLA\d+$/.test(x)))).slice(0, 20);
+      } else if (req.query.item) {
         ids = [String(req.query.item).toUpperCase()];
       } else {
         const busq = await axios.get(`${API}/users/${uid}/items/search`, {
@@ -285,6 +289,132 @@ module.exports = (app) => {
         error: 'No se pudieron obtener los costos.',
         detalle: err.response?.data || err.message,
       });
+    }
+  });
+
+  // GET /api/costos/simular?item=MLA...&precios=32999,33000,38999
+  // Lo que cobraría Mercado Libre por esa publicación A CADA PRECIO (hasta 8): % de cargo,
+  // financiación, cargo fijo y el envío gratis a cargo del vendedor. Sirve para confirmar con ML
+  // el precio piso y el de equilibrio que calcula el panel (el cargo fijo y el envío cambian
+  // según el precio, sobre todo al cruzar los $33.000).
+  router.get('/simular', async (req, res) => {
+    try {
+      const token = await app.locals.getAccessTokenValido();
+      const tokens = app.locals.leerTokens();
+      const API = app.locals.ML_API;
+      const auth = { headers: { Authorization: `Bearer ${token}` } };
+      const itemId = String(req.query.item || '').toUpperCase();
+      if (!/^MLA\d+$/.test(itemId)) return res.status(400).json({ error: 'Falta ?item=MLA...' });
+      const precios = Array.from(new Set(String(req.query.precios || '').split(',').map(Number).filter((n) => n > 0 && n < 1e8).map((n) => Math.round(n)))).slice(0, 8);
+      if (!precios.length) return res.status(400).json({ error: 'Falta ?precios=...' });
+
+      const lote = await multigetItems(API, auth, [itemId]);
+      const b = lote[0] && lote[0].code === 200 ? lote[0].body : null;
+      if (!b) return res.status(404).json({ error: 'No se encontró la publicación ' + itemId });
+      const logistic = b.shipping?.logistic_type || 'drop_off';
+
+      const resultado = await enTandas(precios, 4, async (precio) => {
+        const fila = { precio, cargo_venta_pct: null, financiacion_pct: null, cargo_fijo: null, envio_ml: null, avisos: [] };
+        try {
+          const r = await axios.get(`${API}/sites/MLA/listing_prices`, {
+            ...auth,
+            params: { price: precio, category_id: b.category_id, listing_type_id: b.listing_type_id, logistic_type: logistic, shipping_mode: 'me2' },
+          });
+          const d = Array.isArray(r.data) ? r.data[0] : r.data;
+          const det = d?.sale_fee_details || {};
+          fila.cargo_venta_pct = det.meli_percentage_fee ?? det.percentage_fee ?? null;
+          fila.financiacion_pct = det.financing_add_on_fee ?? 0;
+          fila.cargo_fijo = det.fixed_fee ?? 0;
+        } catch (e) {
+          fila.avisos.push('comisión: ' + (e.response?.data?.message || e.message));
+        }
+        // En Flex el envío lo paga el vendedor a su mensajería: ML no lo cobra.
+        if (logistic !== 'self_service') {
+          try {
+            const params = {
+              item_id: b.id, item_price: precio, listing_type_id: b.listing_type_id, mode: 'me2',
+              condition: b.condition || 'new', logistic_type: logistic, verbose: true,
+            };
+            if (b.shipping?.dimensions) params.dimensions = b.shipping.dimensions;
+            const r = await axios.get(`${API}/users/${tokens.user_id}/shipping_options/free`, { ...auth, params });
+            fila.envio_ml = r.data?.coverage?.all_country?.list_cost ?? null;
+          } catch (e) {
+            fila.avisos.push('envío: ' + (e.response?.data?.message || e.message));
+          }
+        }
+        return fila;
+      });
+      res.json({ item: itemId, logistic_type: logistic, listing_type_id: b.listing_type_id, precio_publicado: b.price, simulacion: resultado, generado_en: new Date().toISOString() });
+    } catch (err) {
+      console.error(err.response?.data || err.message);
+      res.status(500).json({ error: 'No se pudo simular el precio.', detalle: err.response?.data || err.message });
+    }
+  });
+
+  // GET /api/costos/iibb   (?refrescar=1 para recalcular, ?dias=60)
+  // Retención de Ingresos Brutos REAL sobre tus ventas: Mercado Pago retiene un % según la
+  // provincia del comprador (p. ej. "SIRTAC por falta de alta Neuquén", 1,5 %) y en otras ventas
+  // no retiene nada. Se lee de cada pago (charges_details de tipo "tax") y se devuelve
+  // retenido ÷ vendido, contando también las ventas sin retención. Se guarda 12 h.
+  const CLAVE_IIBB = 'jopex_iibb_promedio';
+  router.get('/iibb', async (req, res) => {
+    const store = app.locals.store;
+    try {
+      if (req.query.refrescar !== '1') {
+        const c = await store.readKey(CLAVE_IIBB).catch(() => null);
+        if (c && c.generado_en && Date.now() - new Date(c.generado_en).getTime() < 12 * 3600 * 1000) return res.json({ ...c, cache: true });
+      }
+      const token = await app.locals.getAccessTokenValido();
+      const tokens = app.locals.leerTokens();
+      const API = app.locals.ML_API;
+      const auth = { headers: { Authorization: `Bearer ${token}` } };
+      const dias = Math.min(Math.max(Number(req.query.dias) || 60, 7), 180);
+      const desde = new Date(Date.now() - dias * 86400000).toISOString().slice(0, 10);
+
+      // Órdenes pagadas del período (como mucho 300, de la más nueva a la más vieja).
+      const ordenes = [];
+      for (let offset = 0; offset < 300; offset += 50) {
+        const r = await axios.get(`${API}/orders/search`, {
+          ...auth, timeout: 20000,
+          params: { seller: tokens.user_id, 'order.status': 'paid', 'order.date_created.from': `${desde}T00:00:00.000-03:00`, sort: 'date_desc', limit: 50, offset },
+        });
+        const lista = r.data.results || [];
+        ordenes.push(...lista);
+        if (lista.length < 50 || offset + 50 >= (r.data.paging?.total || 0)) break;
+      }
+      const pagos = [];
+      ordenes.forEach((o) => (o.payments || []).forEach((p) => {
+        if (p.status === 'approved' && p.transaction_amount > 0) pagos.push({ id: p.id, monto: p.transaction_amount });
+      }));
+
+      let vendido = 0, retenido = 0, conRetencion = 0, leidos = 0, fallidos = 0;
+      const porProvincia = {};
+      await enTandas(pagos, 6, async (p) => {
+        try {
+          const r = await axios.get(`https://api.mercadopago.com/v1/payments/${p.id}`, { ...auth, timeout: 15000 });
+          const impuestos = (r.data.charges_details || []).filter((c) => c.type === 'tax' && c.accounts?.from === 'collector' && /withholding|retenc/i.test(c.name || ''));
+          const monto = impuestos.reduce((s, c) => s + (Number(c.amounts?.original) || 0) - (Number(c.amounts?.refunded) || 0), 0);
+          vendido += p.monto; retenido += monto; leidos++;
+          if (monto > 0) {
+            conRetencion++;
+            impuestos.forEach((c) => {
+              const prov = c.metadata?.mov_financial_entity || String(c.name || '').split('-').pop() || 'otra';
+              porProvincia[prov] = (porProvincia[prov] || 0) + 1;
+            });
+          }
+        } catch (e) { fallidos++; }
+      });
+      const out = {
+        pct: vendido > 0 ? Number(((retenido / vendido) * 100).toFixed(3)) : null,
+        ventas: leidos, con_retencion: conRetencion, no_leidas: fallidos,
+        vendido: Math.round(vendido), retenido: Math.round(retenido * 100) / 100,
+        por_provincia: porProvincia, desde, dias, generado_en: new Date().toISOString(),
+      };
+      if (leidos > 0) await store.saveKey(CLAVE_IIBB, out).catch(() => {});
+      res.json(out);
+    } catch (err) {
+      console.error(err.response?.data || err.message);
+      res.status(500).json({ error: 'No se pudo calcular la retención de IIBB.', detalle: err.response?.data || err.message });
     }
   });
 
