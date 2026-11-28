@@ -88,8 +88,9 @@ function requireApiKey(req, res, next) {
 // Abrí esta URL en el navegador (con tu APP_SECRET) para iniciar el permiso de ML.
 // Ej: https://tu-app.onrender.com/auth/login?key=TU_APP_SECRET
 app.get('/auth/login', (req, res) => {
-  if (req.query.key !== process.env.APP_SECRET) {
-    return res.status(403).send('No autorizado.');
+  // Alcanza con estar logueado en el panel (misma sesión) o, si no, con ?key=APP_SECRET.
+  if (!haySesion(req) && (!process.env.APP_SECRET || req.query.key !== process.env.APP_SECRET)) {
+    return res.status(403).send('No autorizado. Entrá primero al panel (https://jopex-ml-backend.onrender.com/PANEL) y después volvé a abrir este link.');
   }
   const url = `${ML_AUTH}/authorization?response_type=code&client_id=${process.env.ML_CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.ML_REDIRECT_URI)}`;
   res.redirect(url);
