@@ -389,6 +389,7 @@ module.exports = (app) => {
 
       let vendido = 0, retenido = 0, conRetencion = 0, leidos = 0, fallidos = 0;
       const porProvincia = {};
+      const porTipo = {}; // nombre del cargo (régimen + provincia) -> cantidad, monto y alícuotas
       await enTandas(pagos, 6, async (p) => {
         try {
           const r = await axios.get(`https://api.mercadopago.com/v1/payments/${p.id}`, { ...auth, timeout: 15000 });
@@ -400,6 +401,9 @@ module.exports = (app) => {
             impuestos.forEach((c) => {
               const prov = c.metadata?.mov_financial_entity || String(c.name || '').split('-').pop() || 'otra';
               porProvincia[prov] = (porProvincia[prov] || 0) + 1;
+              const t = (porTipo[c.name || 'sin_nombre'] = porTipo[c.name || 'sin_nombre'] || { n: 0, monto: 0, alicuotas: [] });
+              t.n++; t.monto = Math.round((t.monto + (Number(c.amounts?.original) || 0)) * 100) / 100;
+              if (c.rate != null && !t.alicuotas.includes(c.rate)) t.alicuotas.push(c.rate);
             });
           }
         } catch (e) { fallidos++; }
@@ -408,7 +412,7 @@ module.exports = (app) => {
         pct: vendido > 0 ? Number(((retenido / vendido) * 100).toFixed(3)) : null,
         ventas: leidos, con_retencion: conRetencion, no_leidas: fallidos,
         vendido: Math.round(vendido), retenido: Math.round(retenido * 100) / 100,
-        por_provincia: porProvincia, desde, dias, generado_en: new Date().toISOString(),
+        por_provincia: porProvincia, por_tipo: porTipo, desde, dias, generado_en: new Date().toISOString(),
       };
       if (leidos > 0) await store.saveKey(CLAVE_IIBB, out).catch(() => {});
       res.json(out);
