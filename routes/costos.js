@@ -288,6 +288,34 @@ module.exports = (app) => {
     }
   });
 
+  // GET /api/costos/pago?order=2000...   (diagnóstico, solo lectura)
+  // Muestra el pago de una orden tal como lo devuelven ML y Mercado Pago, para ubicar
+  // dónde viene la retención de Ingresos Brutos que figura en el detalle de la venta.
+  router.get('/pago', async (req, res) => {
+    try {
+      const token = await app.locals.getAccessTokenValido();
+      const API = app.locals.ML_API;
+      const auth = { headers: { Authorization: `Bearer ${token}` } };
+      const orderId = String(req.query.order || '').replace(/\D/g, '');
+      if (!orderId) return res.status(400).json({ error: 'Falta ?order=...' });
+      const intento = async (url) => {
+        try { const r = await axios.get(url, { ...auth, timeout: 15000 }); return { ok: true, data: r.data }; }
+        catch (e) { return { ok: false, status: e.response?.status, error: e.response?.data || e.message }; }
+      };
+      const orden = await intento(`${API}/orders/${orderId}`);
+      const pagos = orden.ok ? (orden.data.payments || []) : [];
+      const out = { order: orderId, payments: pagos, mp: [], collections: [] };
+      for (const p of pagos) {
+        out.mp.push(await intento(`https://api.mercadopago.com/v1/payments/${p.id}`));
+        out.collections.push(await intento(`${API}/collections/${p.id}`));
+      }
+      if (!orden.ok) out.error_orden = orden;
+      res.json(out);
+    } catch (err) {
+      res.status(500).json({ error: 'No se pudo leer el pago.', detalle: err.response?.data || err.message });
+    }
+  });
+
   // GET /api/costos/promos?item=MLA...   (diagnóstico, solo lectura)
   // Muestra dónde vive cada promoción de ese ítem: la lista cruda del ítem, la del "producto de usuario"
   // (user_product_id) y, por cada campaña del vendedor, si el ítem o su producto aparece adentro y con
