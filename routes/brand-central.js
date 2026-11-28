@@ -202,6 +202,35 @@ module.exports = (app) => {
     } catch (e) { errorML(res, e); }
   });
 
+  // POST /api/brand-central/foto — sube UNA imagen a Mercado Libre y devuelve su id
+  // (para usarla en una sugerencia). Body: { nombre: "x.png", base64: "..." }
+  // No modifica ninguna publicación ni sugerencia.
+  router.post('/foto', async (req, res) => {
+    const { nombre, base64 } = req.body || {};
+    if (!base64) return res.status(400).json({ error: 'Falta la imagen (base64).' });
+    try {
+      const { API, auth } = await conAuth();
+      const buf = Buffer.from(String(base64).replace(/^data:[^,]+,/, ''), 'base64');
+      const tipo = /\.jpe?g$/i.test(nombre || '') ? 'image/jpeg' : 'image/png';
+      const form = new FormData();
+      form.append('file', new Blob([buf], { type: tipo }), nombre || 'foto.png');
+      const r = await axios.post(`${API}/pictures/items/upload`, form, { ...auth, timeout: 60000 });
+      res.json({ id: r.data?.id, nombre: nombre || null, variaciones: (r.data?.variations || []).length });
+    } catch (e) { errorML(res, e); }
+  });
+
+  // PUT /api/brand-central/sugerencia/:id — corrige una sugerencia ya creada
+  // (título, fotos, atributos). No consume cupo. Requiere confirmar=1.
+  // Body: los campos a cambiar, tal cual los espera ML (ej. { title, pictures: [{ id }] }).
+  router.put('/sugerencia/:id', async (req, res) => {
+    if (req.query.confirmar !== '1') return res.status(400).json({ error: 'Falta confirmar=1 (modifica la sugerencia en ML).' });
+    try {
+      const { API, auth } = await conAuth();
+      const r = await axios.put(`${API}/catalog_suggestions/${encodeURIComponent(req.params.id)}`, req.body, auth);
+      res.json({ ok: true, sugerencia: r.data || null });
+    } catch (e) { errorML(res, e); }
+  });
+
   // GET /api/brand-central/sugerencia/:id — estado y validaciones de una sugerencia.
   router.get('/sugerencia/:id', async (req, res) => {
     try {
