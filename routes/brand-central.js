@@ -98,5 +98,101 @@ module.exports = (app) => {
     }
   });
 
+  const conAuth = async () => {
+    const token = await app.locals.getAccessTokenValido();
+    return { API: app.locals.ML_API, auth: { headers: { Authorization: `Bearer ${token}` }, timeout: 20000 } };
+  };
+  const errorML = (res, e) => res.status(e.response?.status || 500).json({
+    error: e.response?.data?.message || e.message, detalle: e.response?.data || null,
+  });
+
+  // GET /api/brand-central/ficha/:dominio — atributos que pide ML para sugerir
+  // un producto de ese dominio (input de la ficha técnica, canal catalog_suggestions).
+  router.get('/ficha/:dominio', async (req, res) => {
+    try {
+      const { API, auth } = await conAuth();
+      const r = await axios.get(`${API}/domains/${encodeURIComponent(req.params.dominio)}/technical_specs/input`, {
+        ...auth, params: { channel_id: 'catalog_suggestions' },
+      });
+      const atributos = [];
+      (r.data?.groups || []).forEach((g) => (g.components || []).forEach((c) => (c.attributes || []).forEach((a) => {
+        atributos.push({
+          grupo: g.label, id: a.id, nombre: a.name, tipo: a.value_type, tags: a.tags || [],
+          valores: (a.values || []).slice(0, 40).map((v) => ({ id: v.id, nombre: v.name })),
+          unidades: (a.allowed_units || []).map((u) => u.name || u.id),
+          ayuda: c.ui_config?.hint || null,
+        });
+      })));
+      res.json({ dominio: req.params.dominio, atributos });
+    } catch (e) { errorML(res, e); }
+  });
+
+  // GET /api/brand-central/item/:id — datos de UNA publicación propia que sirven
+  // para armar la sugerencia (atributos, fotos, descripción).
+  router.get('/item/:id', async (req, res) => {
+    try {
+      const { API, auth } = await conAuth();
+      const tokens = app.locals.leerTokens();
+      const it = (await axios.get(`${API}/items/${encodeURIComponent(req.params.id)}`, auth)).data;
+      if (String(it.seller_id) !== String(tokens.user_id)) return res.status(403).json({ error: 'No es una publicación propia.' });
+      let descripcion = null;
+      try { descripcion = (await axios.get(`${API}/items/${it.id}/description`, auth)).data?.plain_text || null; } catch (e) { /* sin descripción */ }
+      res.json({
+        id: it.id, titulo: it.title, dominio: it.domain_id, categoria: it.category_id, precio: it.price,
+        vendidos: it.sold_quantity, catalogo: Boolean(it.catalog_listing), catalog_product_id: it.catalog_product_id || null,
+        fotos: (it.pictures || []).map((p) => ({ id: p.id, url: p.secure_url || p.url, size: p.size })),
+        atributos: (it.attributes || []).map((a) => ({ id: a.id, nombre: a.name, valor: a.value_name, valor_id: a.value_id })),
+        variaciones: (it.variations || []).map((v) => ({
+          id: v.id, combinacion: (v.attribute_combinations || []).map((a) => `${a.name}: ${a.value_name}`).join(', '),
+          fotos: v.picture_ids || [],
+        })),
+        descripcion,
+      });
+    } catch (e) { errorML(res, e); }
+  });
+
+  // POST /api/brand-central/validar — chequeo previo de una sugerencia (no la crea).
+  router.post('/validar', express.json({ limit: '1mb' }), async (req, res) => {
+    try {
+      const { API, auth } = await conAuth();
+      const r = await axios.post(`${API}/catalog_suggestions/validate`, req.body, auth);
+      res.json({ ok: true, status: r.status, respuesta: r.data || null });
+    } catch (e) {
+      if (e.response?.status === 400) return res.json({ ok: false, errores: e.response.data?.cause || e.response.data });
+      errorML(res, e);
+    }
+  });
+
+  // POST /api/brand-central/sugerir — CREA la sugerencia (consume cupo).
+  // Requiere confirmar=1 en la query para que no se dispare por error.
+  // Body: { sugerencia: {...}, descripcion: "texto" }
+  router.post('/sugerir', express.json({ limit: '1mb' }), async (req, res) => {
+    if (req.query.confirmar !== '1') return res.status(400).json({ error: 'Falta confirmar=1 (esta acción consume cupo).' });
+    try {
+      const { API, auth } = await conAuth();
+      const s = (await axios.post(`${API}/catalog_suggestions`, req.body.sugerencia, auth)).data;
+      let descripcion = null;
+      if (req.body.descripcion) {
+        try {
+          await axios.post(`${API}/catalog_suggestions/${s.id}/description`, { plain_text: req.body.descripcion }, auth);
+          descripcion = 'ok';
+        } catch (e) { descripcion = e.response?.data?.message || e.message; }
+      }
+      res.json({ sugerencia: s, descripcion });
+    } catch (e) { errorML(res, e); }
+  });
+
+  // GET /api/brand-central/sugerencia/:id — estado y validaciones de una sugerencia.
+  router.get('/sugerencia/:id', async (req, res) => {
+    try {
+      const { API, auth } = await conAuth();
+      const id = encodeURIComponent(req.params.id);
+      const s = (await axios.get(`${API}/catalog_suggestions/${id}`, auth)).data;
+      let validaciones = null;
+      try { validaciones = (await axios.get(`${API}/catalog_suggestions/${id}/validations`, auth)).data?.validations || []; } catch (e) { /* aún no hay */ }
+      res.json({ sugerencia: s, validaciones });
+    } catch (e) { errorML(res, e); }
+  });
+
   return router;
 };
