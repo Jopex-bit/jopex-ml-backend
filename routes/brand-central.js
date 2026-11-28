@@ -182,6 +182,26 @@ module.exports = (app) => {
     } catch (e) { errorML(res, e); }
   });
 
+  // POST /api/brand-central/sugerencia/:id/descripcion — carga (o modifica, si ya
+  // tiene) la descripción de una sugerencia ya creada. Body: { descripcion: "texto" }
+  // Existe porque justo después de crear la sugerencia ML a veces todavía no la encuentra.
+  router.post('/sugerencia/:id/descripcion', express.json({ limit: '1mb' }), async (req, res) => {
+    const texto = String(req.body?.descripcion || '').trim();
+    if (!texto) return res.status(400).json({ error: 'Falta la descripción.' });
+    try {
+      const { API, auth } = await conAuth();
+      const url = `${API}/catalog_suggestions/${encodeURIComponent(req.params.id)}/description`;
+      try {
+        await axios.post(url, { plain_text: texto }, auth);
+        return res.json({ ok: true, accion: 'creada' });
+      } catch (e) {
+        if (!/already has a description/i.test(e.response?.data?.message || '')) throw e;
+        await axios.put(url, { plain_text: texto }, auth);
+        return res.json({ ok: true, accion: 'modificada' });
+      }
+    } catch (e) { errorML(res, e); }
+  });
+
   // GET /api/brand-central/sugerencia/:id — estado y validaciones de una sugerencia.
   router.get('/sugerencia/:id', async (req, res) => {
     try {
