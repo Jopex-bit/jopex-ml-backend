@@ -2959,32 +2959,7 @@ function CostosPanel({
       abierto: abierta === claveDe(g),
       onToggle: () => setSkuAbierto({ sel: seleccion, clave: abierta === claveDe(g) ? '__ninguno__' : claveDe(g) })
     }, abierta === claveDe(g) ? tarjetaDeSku(g) : null) : tarjetaDeSku(g));
-  })()), /*#__PURE__*/React.createElement("div", {
-    className: "sub-block"
-  }, /*#__PURE__*/React.createElement("h3", null, "Historial de lotes (por producto)"), /*#__PURE__*/React.createElement("div", {
-    className: "sub-empty"
-  }, "El \"Valor de Adquisición\" de cada tarjeta refleja el último lote cargado. El detalle histórico completo (fecha, cantidad, nota) se suma en la próxima vuelta.")), /*#__PURE__*/React.createElement("div", {
-    className: "sub-block"
-  }, /*#__PURE__*/React.createElement("h3", null, "Promociones (desde Mercado Libre)"),
-  !syncInfo && /*#__PURE__*/React.createElement("div", { className: "sub-empty" },
-    "Tocá \"Sincronizar con Mercado Libre\" para traer las promociones vigentes y sus fechas de fin."),
-  syncInfo && /*#__PURE__*/React.createElement("div", null,
-    syncInfo.campanas && syncInfo.campanas.length > 0 && /*#__PURE__*/React.createElement("p", { className: "sync-linea" },
-      "Campañas activas: " + syncInfo.campanas.map(c => c.nombre + ' (hasta ' + c.hasta + ')').join(' · ')),
-    syncInfo.conPromo && syncInfo.conPromo.length > 0
-      ? /*#__PURE__*/React.createElement("ul", { className: "sync-lista" },
-          syncInfo.conPromo.map((x, i) => /*#__PURE__*/React.createElement("li", { key: i },
-            /*#__PURE__*/React.createElement("strong", null, x.titulo.slice(0, 48)),
-            ' — ' + (x.pct != null ? x.pct + '% off' : 'con descuento') +
-            ' a ' + money(x.precio) + ' · vence ' + x.hasta)))
-      : /*#__PURE__*/React.createElement("div", { className: "sub-empty" }, "Ninguna publicación tiene promoción aplicada ahora."),
-    syncInfo.disponibles && syncInfo.disponibles.length > 0 && /*#__PURE__*/React.createElement("div", { className: "sync-oportunidad" },
-      /*#__PURE__*/React.createElement("strong", null, "Promociones ofrecidas que no aplicaste: "),
-      syncInfo.disponibles.map(x => x.titulo.slice(0, 40) + (x.pct != null ? ' (' + x.pct + '%)' : '')).join(' · ')),
-    syncInfo.avisos && syncInfo.avisos.length > 0 && /*#__PURE__*/React.createElement("div", { className: "sync-aviso" },
-      syncInfo.avisos.length + ' publicación(es) con datos incompletos — revisá que tengan categoría y envío configurados.'),
-    /*#__PURE__*/React.createElement("p", { className: "sync-linea" },
-      "Última sincronización: " + new Date(syncInfo.generado_en).toLocaleString('es-AR')))));
+  })()));
 }
 
 // ---------- Tienda Nube: precio sugerido y margen real por pasarela ----------
