@@ -1631,231 +1631,6 @@ function netoConPrecio(precio, m, costo, tasasCuotas, iibbPct, conf) {
   const margen = deposito - costo;
   return { precio, cargoPct, comVar, fijo, finPct, fin, envio, iibb, deposito, costo, margen, margenPct: precio > 0 ? margen / precio * 100 : 0 };
 }
-// Menor precio entero en [desde, hasta] que cumple la condición (barrido de a $10 y ajuste fino).
-function buscarPrecio(cumple, desde, hasta) {
-  for (let p = desde; p <= hasta; p += 10) {
-    if (cumple(p)) {
-      let q = Math.max(desde, p - 9);
-      while (q < p && !cumple(q)) q++;
-      return q;
-    }
-  }
-  return null;
-}
-// Precio de equilibrio, precio piso y "zona muerta" (rango arriba de $33.000 donde ganás menos que a $32.999).
-// Tramo de precio en el que ML cobra lo mismo (cargo fijo debajo de $33.000; envío según franja arriba).
-function claveTramoML(p) {
-  if (p < UMBRAL_ENVIO_GRATIS) return 'f' + TRAMOS_PRECIO_FIJO.findIndex(t => p >= t.desde && p <= t.hasta);
-  return p < 50000 ? 'e1' : 'e2';
-}
-// confDe(precio): lo que informó ML para ese precio o, si no, para otro precio del mismo tramo (o null).
-function analizarPrecios(m, costo, tasasCuotas, iibbPct, confDe) {
-  const actual = Number((promoVigente(m) || {}).precio) || Number(m.precioML) || 0;
-  const hasta = Math.max(actual * 2, 150000);
-  const neto = p => netoConPrecio(p, m, costo, tasasCuotas, iibbPct, confDe ? confDe(p) : null);
-  const minimo = margenMinimoDe(m);
-  const okMin = p => neto(p).margenPct >= minimo;
-  const equilibrio = buscarPrecio(p => neto(p).margen >= 0, 1000, hasta);
-  const piso = buscarPrecio(okMin, 1000, hasta);
-  let zona = null;
-  const U = UMBRAL_ENVIO_GRATIS;
-  if (okMin(U - 1) && !okMin(U)) {
-    const fin = buscarPrecio(okMin, U, hasta);
-    zona = { desde: U, hasta: fin != null ? fin - 1 : null, salida: fin, margenAbajo: neto(U - 1), margenEn: neto(U) };
-  }
-  const na = actual > 0 ? neto(actual) : null;
-  return { actual, equilibrio, piso, minimo, zona, actualPositivo: !!na && na.margen >= 0, actualOk: !!na && na.margenPct >= minimo };
-}
-
-function notaBajar(an) {
-  const eq = an.equilibrio ? ' Debajo de ' + money(an.equilibrio) + ' vendés a pérdida.' : '';
-  if (!an.actualPositivo) return 'A ' + money(an.actual) + ' estás vendiendo a pérdida.' + (an.equilibrio ? ' El equilibrio es ' + money(an.equilibrio) + '.' : '');
-  if (!an.actualOk) return 'A ' + money(an.actual) + ' quedás debajo de tu margen mínimo (' + pct(an.minimo) + ').' + (an.piso ? ' El precio más bajo que lo cumple es ' + money(an.piso) + '.' : '') + eq;
-  const hasta = an.zona && an.zona.salida && an.actual >= an.zona.salida ? an.zona.salida : an.piso;
-  return 'Desde ' + money(an.actual) + ' podés bajar hasta ' + money(hasta) + ' sin perder tu margen mínimo (' + pct(an.minimo) + ').' +
-    (hasta !== an.piso && an.piso ? ' O saltar a ' + money(UMBRAL_ENVIO_GRATIS - 1) + ' o menos (hasta ' + money(an.piso) + '), donde el envío lo paga el comprador.' : '') + eq;
-}
-// Bloque de la tarjeta de un SKU: trae de ML sus publicaciones en el momento y muestra, por condición
-// de venta, el margen neto real ahora, el precio de equilibrio, el precio piso y un precio a prueba.
-function AnalisisPrecioML({ miembros, costo, tasasCuotas, onAplicarML }) {
-  const h = React.createElement;
-  const [cargando, setCargando] = useState(false);
-  const [error, setError] = useState('');
-  const [msg, setMsg] = useState('');
-  const [sim, setSim] = useState({});        // { itemId: { precio: fila de ML } }
-  const [prueba, setPrueba] = useState({});  // { id de tarjeta: precio a probar }
-  const [iibb, setIibb] = useState(leerIibb);
-  const [iibbEdit, setIibbEdit] = useState(() => { try { return window.localStorage.getItem('jopex_iibb_manual') || ''; } catch (e) { return ''; } });
-  const costoOk = costo > 0;
-  const iibbPct = Number(iibb.pct) || 0;
-
-  const preciosClave = (m, an) => {
-    const ps = [an.actual, an.equilibrio, an.piso, Number(prueba[m.id]) || null];
-    if (an.zona) ps.push(UMBRAL_ENVIO_GRATIS - 1, UMBRAL_ENVIO_GRATIS, an.zona.salida);
-    return Array.from(new Set(ps.filter(p => p > 0).map(p => Math.round(p)))).slice(0, 8);
-  };
-  // Lo confirmado por ML para una publicación, extendido a todo el tramo de precio.
-  const confDe = m => {
-    const s = sim[m.mlItemId];
-    if (!s) return () => null;
-    const filas = Object.values(s).filter(f => f && f.cargo_venta_pct != null);
-    return p => {
-      const exacta = s[Math.round(p)];
-      if (exacta && exacta.cargo_venta_pct != null) return exacta;
-      const k = claveTramoML(p);
-      return filas.find(f => claveTramoML(f.precio) === k) || null;
-    };
-  };
-  const confirmar = async (cfg, lista, pctIibb) => {
-    const base = cfg.url.replace(/\/+$/, '');
-    const nuevo = {};
-    for (const m of lista) {
-      if (!m.mlItemId) continue;
-      const an = analizarPrecios(m, costo, tasasCuotas, pctIibb != null ? pctIibb : iibbPct, confDe(m));
-      const ps = preciosClave(m, an);
-      if (!ps.length) continue;
-      const resp = await fetch(base + '/api/costos/simular?item=' + m.mlItemId + '&precios=' + ps.join(','), { headers: cfg.key ? { 'x-api-key': cfg.key } : {} });
-      const j = await resp.json();
-      if (!resp.ok) throw new Error(j.error || ('HTTP ' + resp.status));
-      nuevo[m.mlItemId] = {};
-      (j.simulacion || []).forEach(f => { nuevo[m.mlItemId][f.precio] = f; });
-    }
-    setSim(prev => ({ ...prev, ...nuevo }));
-  };
-  const traer = async () => {
-    const cfg = leerCfgBackend();
-    if (!cfg.url) { setError('Falta configurar la URL del backend (está en el módulo Investigación).'); return; }
-    const ids = miembros.map(m => m.mlItemId).filter(Boolean);
-    if (!ids.length) { setError('Este SKU no está vinculado a una publicación de Mercado Libre.'); return; }
-    setCargando(true); setError(''); setMsg('');
-    try {
-      const base = cfg.url.replace(/\/+$/, '');
-      const hdr = { headers: cfg.key ? { 'x-api-key': cfg.key } : {} };
-      const resp = await fetch(base + '/api/costos?items=' + ids.join(','), hdr);
-      const j = await resp.json();
-      if (!resp.ok) throw new Error(j.error || ('HTTP ' + resp.status));
-      const cambios = {};
-      (j.productos || []).forEach(ml => {
-        const m = miembros.find(x => x.mlItemId === ml.ml_item_id);
-        if (m) cambios[m.id] = camposDesdeML(ml);
-      });
-      onAplicarML(cambios);
-      // Retención de IIBB real (el servidor la guarda 12 h).
-      let pctNuevo = null;
-      try {
-        const ri = await fetch(base + '/api/costos/iibb', hdr);
-        const ji = await ri.json();
-        if (ri.ok && ji.pct != null) {
-          window.localStorage.setItem('jopex_iibb_promedio', JSON.stringify(ji));
-          const ib = leerIibb();
-          setIibb(ib);
-          pctNuevo = Number(ib.pct) || 0;
-        }
-      } catch (e) {}
-      // Con los datos nuevos, se confirman con ML los precios clave.
-      const actualizados = miembros.map(m => cambios[m.id] ? { ...m, ...cambios[m.id] } : m);
-      if (costoOk) await confirmar(cfg, actualizados, pctNuevo);
-      registrarSync('costos');
-      setMsg('Datos de Mercado Libre al ' + new Date().toLocaleString('es-AR') + '. Tu costo y tu margen no se tocaron.');
-    } catch (e) {
-      setError('No se pudo traer de Mercado Libre: ' + e.message +
-        (String(e.message).includes('Failed to fetch') ? ' — si el servidor estaba dormido, esperá ~50 s y reintentá.' : ''));
-    } finally {
-      setCargando(false);
-    }
-  };
-  const confirmarPrueba = async () => {
-    const cfg = leerCfgBackend();
-    setCargando(true); setError('');
-    try { await confirmar(cfg, miembros); } catch (e) { setError('No se pudo confirmar con ML: ' + e.message); }
-    finally { setCargando(false); }
-  };
-  const guardarIibbManual = v => {
-    setIibbEdit(v);
-    try {
-      if (v === '') window.localStorage.removeItem('jopex_iibb_manual'); else window.localStorage.setItem('jopex_iibb_manual', v);
-    } catch (e) {}
-    setIibb(leerIibb());
-  };
-
-  const col = (m, precio, titulo) => {
-    if (!(precio > 0)) return { titulo, vacio: true };
-    const conf = confDe(m)(precio);
-    const n = netoConPrecio(precio, m, costo, tasasCuotas, iibbPct, conf);
-    return { titulo, n, conf };
-  };
-  const colorM = (n, m) => n.margen <= 0 ? 'var(--danger, #ef4444)' : (n.margenPct < margenMinimoDe(m) ? '#f59e0b' : 'var(--success, #22c55e)');
-  const cuotaTxt = c => c === 'sin' ? 'Contado' : c + ' cuotas sin interés';
-
-  return h('div', { className: 'promo-block analisis-ml' },
-    h('div', { className: 'analisis-ml-head' },
-      h('h4', { style: { margin: 0 } }, 'Margen neto real y ¿hasta cuánto puedo bajar?'),
-      h('button', { type: 'button', className: 'add-btn sync-btn', onClick: traer, disabled: cargando }, cargando ? 'Consultando ML…' : 'Traer de ML')),
-    msg && h('div', { className: 'sync-ok' }, msg),
-    error && h('div', { className: 'competencia-error' }, error),
-    h('div', { className: 'analisis-ml-iibb' },
-      h('span', null, 'Retención IIBB: ', h('b', null, pct(iibbPct)),
-        iibb.manual ? ' (cargada a mano)' :
-        iibb.sinDato ? ' — sin dato todavía: tocá "Traer de ML"' :
-        ' — promedio real de ' + iibb.ventas + ' ventas desde ' + iibb.desde + ' (' + iibb.con_retencion + ' con retención' +
-          (iibb.por_provincia && Object.keys(iibb.por_provincia).length ? ': ' + Object.keys(iibb.por_provincia).join(', ') : '') + ')'),
-      h('label', { className: 'analisis-ml-iibb-manual' }, 'Usar otro %: ',
-        h('input', { type: 'number', step: '0.1', value: iibbEdit, placeholder: 'auto', onChange: e => guardarIibbManual(e.target.value) }))),
-    !costoOk && h('div', { className: 'sub-empty' }, 'Cargá el costo del producto (o elegí la cotización en Investigación) para calcular el margen neto.'),
-    costoOk && miembros.map(m => {
-      const an = analizarPrecios(m, costo, tasasCuotas, iibbPct, confDe(m));
-      const pv = promoVigente(m);
-      const cols = [
-        col(m, an.actual, pv ? 'Ahora (con promo)' : 'Ahora (publicado)'),
-        col(m, an.equilibrio, 'Equilibrio ($0)'),
-        col(m, an.piso, 'Piso (mín. ' + pct(an.minimo) + ')'),
-        col(m, Number(prueba[m.id]) || 0, 'Probar precio')
-      ];
-      const filas = [
-        ['Precio', n => money(n.precio), true],
-        ['Cargo por venta', n => '−' + money(n.comVar) + ' (' + pct(n.cargoPct) + ')'],
-        ['Cargo fijo', n => n.fijo ? '−' + money(n.fijo) : '$0'],
-        ['Cuotas sin interés', n => n.fin ? '−' + money(n.fin) + ' (' + pct(n.finPct) + ')' : '$0'],
-        ['Envío', n => n.envio < 0 ? '+' + money(-n.envio) + ' (a favor)' : n.envio ? '−' + money(n.envio) : '$0 (lo paga el comprador)'],
-        ['Retención IIBB', n => n.iibb ? '−' + money(n.iibb) : '$0'],
-        ['Depósito de ML', n => money(n.deposito), true],
-        ['Costo del producto', n => '−' + money(n.costo)]
-      ];
-      return h('div', { key: m.id, className: 'analisis-ml-cond' },
-        h('div', { className: 'analisis-ml-cond-titulo' },
-          h('b', null, m._condicion || cuotaTxt(m.cuotas || '6')),
-          h('span', { className: 'muted' }, ' · ' + (m.mlItemId || 'sin publicar') + ' · ' + (esFlexCosto(m) ? 'Flex' : m.logistica === 'fulfillment' ? 'Full' : 'Envío común'))),
-        h('div', { className: 'grupo-tabla-wrap' },
-          h('table', { className: 'grupo-tabla analisis-ml-tabla' },
-            h('thead', null, h('tr', null, h('th', null, ''), cols.map((c, i) => h('th', { key: i }, c.titulo,
-              i === 3 && h('div', { className: 'calc-field-input', style: { marginTop: 4 } },
-                h('span', { className: 'cell-prefix' }, '$'),
-                h('input', { type: 'number', value: prueba[m.id] || '', placeholder: 'precio', onChange: e => setPrueba(p => ({ ...p, [m.id]: e.target.value })) })))))),
-            h('tbody', null,
-              filas.map(([label, fn, fuerte], k) => h('tr', { key: k },
-                h('td', { className: 'muted' }, label),
-                cols.map((c, i) => h('td', { key: i, style: fuerte ? { fontWeight: 700 } : undefined }, c.vacio ? '—' : fn(c.n))))),
-              h('tr', { className: 'analisis-ml-total' },
-                h('td', null, h('b', null, 'Margen neto')),
-                cols.map((c, i) => h('td', { key: i, style: c.vacio ? undefined : { fontWeight: 700, color: colorM(c.n, m) } },
-                  c.vacio ? '—' : money(c.n.margen) + ' · ' + pct(c.n.margenPct)))),
-              h('tr', null,
-                h('td', { className: 'muted' }, 'Fuente'),
-                cols.map((c, i) => h('td', { key: i, className: 'muted', style: { fontSize: 11 } },
-                  c.vacio ? '' : c.conf ? '✓ confirmado con ML' : 'estimado con tablas')))))),
-        an.zona && h('div', { className: 'data-note', style: { marginTop: 8, marginBottom: 0 } },
-          '⚠ Zona muerta: a ' + money(UMBRAL_ENVIO_GRATIS - 1) + ' te queda ' + money(an.zona.margenAbajo.margen) + ' (' + pct(an.zona.margenAbajo.margenPct) +
-          '), pero a ' + money(UMBRAL_ENVIO_GRATIS) + ' solo ' + money(an.zona.margenEn.margen) + ' (' + pct(an.zona.margenEn.margenPct) + ') porque desde ahí pagás el envío. ' +
-          (an.zona.salida ? 'Recién desde ' + money(an.zona.salida) + ' volvés a tu margen mínimo: entre ' + money(UMBRAL_ENVIO_GRATIS) + ' y ' + money(an.zona.salida - 1) + ' no conviene publicar.' : '')),
-        an.actual > 0 && h('div', { className: 'tramo-nota' }, notaBajar(an)));
-    }),
-    costoOk && h('div', { className: 'lineas-hint', style: { marginTop: 8 } },
-      'Debajo de ' + money(UMBRAL_ENVIO_GRATIS) + ' el envío lo paga el comprador (si no ofrecés envío gratis) y aparece el cargo fijo. ',
-      'Flex: promedio de las zonas de Novaflex + empaquetado, menos lo que acredita ML. ',
-      'Los precios marcados "estimado" salen de las tablas del panel; "Traer de ML" los confirma con Mercado Libre. ',
-      Object.keys(prueba).some(k => Number(prueba[k]) > 0) && h('button', { type: 'button', className: 'link-btn', onClick: confirmarPrueba, disabled: cargando }, 'Confirmar con ML el precio a prueba')));
-}
-
 // ---------- Alerta de margen mínimo (por SKU, con el precio de la promo vigente) ----------
 // Mínimo aceptable: el que cargues en el SKU o, si está vacío, la mitad del margen deseado.
 // Rojo si con la promo el margen es negativo; amarillo si queda entre 0 y el mínimo.
@@ -2051,15 +1826,6 @@ function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate
         h(CampoInput, { label: '% Mg. de Utilidad deseado', prefix: '%', value: prim.mgUtilidad, onChange: v => onUpdateGrupo('mgUtilidad', v) }),
         h(CampoInput, { label: '% Mg. mínimo aceptable (vacío = la mitad del deseado: ' + pct(margenMinimoDe({ mgUtilidad: prim.mgUtilidad })) + ')', prefix: '%', value: prim.mgMinimo == null ? '' : prim.mgMinimo, onChange: v => onUpdateGrupo('mgMinimo', v) }))),
     h(AvisoMargenMinimo, { lineas: (() => { const lin = []; filas.forEach(f => { if (!f.mpromo) return; const nv = nivelMargen(f.mpromo.margenPct, prim); if (nv) lin.push({ nivel: nv.nivel, cond: f.cond ? f.cond.label : '', precio: Number(f.promo.precio), margenPct: f.mpromo.margenPct, minimo: nv.minimo }); }); return lin; })() }),
-    onAplicarML && h(AnalisisPrecioML, {
-      miembros: g.miembros.map((m, i) => ({
-        ...m,
-        cuotas: tres ? CONDICIONES_SKU[i].cuotas : (m.cuotas || '6'),
-        _condicion: tres ? CONDICIONES_SKU[i].label : undefined,
-        mgUtilidad: prim.mgUtilidad, mgMinimo: prim.mgMinimo, pesoKg: prim.pesoKg
-      })),
-      costo: costoOk ? costo : 0, tasasCuotas: tasasCuotas, onAplicarML: onAplicarML
-    }),
     h('div', { className: 'promo-block' },
       h('h4', null, 'Condiciones de venta'),
       !costoOk && h('div', { className: 'sub-empty' }, 'Cargá el costo del producto para ver el precio sugerido y los márgenes. Los precios publicados ya se ven abajo.'),
@@ -2099,7 +1865,7 @@ function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate
     abierta && (() => {
       const m = g.miembros.find(x => x.id === abierta);
       return m ? h(ProductoCostoCard, {
-        p: m, onUpdate: onUpdateMiembro, onRemove: onRemove, onDuplicate: onDuplicate, tasasCuotas: tasasCuotas,
+        p: m, onUpdate: onUpdateMiembro, onRemove: onRemove, onDuplicate: onDuplicate, tasasCuotas: tasasCuotas, onAplicarML: onAplicarML,
         onUpdateTasa: onUpdateTasa, tcBelo: tcBelo, cotizaciones: cotizaciones, stockProductos: stockProductos
       }) : null;
     })());
@@ -2126,6 +1892,38 @@ function ProductoCostoCard({
   const loteCosto = lotesInfo && lotesInfo.costo ? lotesInfo : null;
   const r = calcularCosto(ef ? { ...p, valorAdquisicion: ef.total } : loteCosto ? { ...p, valorAdquisicion: Math.round(loteCosto.costo.valor * 100) / 100 } : p, tasasCuotas);
   const costoEf = ef ? ef.total : loteCosto ? Math.round(loteCosto.costo.valor * 100) / 100 : Number(p.valorAdquisicion);
+  // Precio REAL al que se vende en Mercado Libre (con la oferta vigente, si hay) y su desglose.
+  const [syncML, setSyncML] = useState(false);
+  const [syncMLError, setSyncMLError] = useState('');
+  const pvML = promoVigente(p);
+  const precioReal = Number(pvML && pvML.precio) || Number(p.precioML) || 0;
+  const verML = !!p.mlItemId && precioReal > 0 && costoEf > 0;
+  const nML = verML ? netoConPrecio(precioReal, p, costoEf, tasasCuotas, leerIibb().pct,
+    precioReal === Number(p.precioML) ? { cargo_fijo: p.cargoFijoML } : null) : null;
+  const sincronizarEste = async () => {
+    const cfg = leerCfgBackend();
+    if (!cfg.url) { setSyncMLError('Falta configurar la URL del backend.'); return; }
+    setSyncML(true); setSyncMLError('');
+    try {
+      const base = cfg.url.replace(/\/+$/, '');
+      const hdr = { headers: cfg.key ? { 'x-api-key': cfg.key } : {} };
+      const resp = await fetch(base + '/api/costos?items=' + p.mlItemId, hdr);
+      const j = await resp.json();
+      if (!resp.ok) throw new Error(j.error || ('HTTP ' + resp.status));
+      const ml = (j.productos || [])[0];
+      if (!ml) throw new Error('Mercado Libre no devolvió la publicación.');
+      try {
+        const ri = await fetch(base + '/api/costos/iibb', hdr);
+        const ji = await ri.json();
+        if (ri.ok && ji.pct != null) window.localStorage.setItem('jopex_iibb_promedio', JSON.stringify(ji));
+      } catch (e) {}
+      onAplicarML({ [p.id]: camposDesdeML(ml) });
+    } catch (e) {
+      setSyncMLError('No se pudo sincronizar: ' + e.message + (String(e.message).includes('Failed to fetch') ? ' — si el servidor estaba dormido, esperá ~50 s y reintentá.' : ''));
+    } finally {
+      setSyncML(false);
+    }
+  };
 
   const guardarSku = async () => {
     const sku = (p.sku || '').trim();
@@ -2209,9 +2007,7 @@ function ProductoCostoCard({
     const nv = nivelMargen(mp.margenPct, p);
     return nv ? /*#__PURE__*/React.createElement(AvisoMargenMinimo, { lineas: [{ nivel: nv.nivel, cond: '', precio: Number(pv.precio), margenPct: mp.margenPct, minimo: nv.minimo }] }) : null;
   })(),
-  onAplicarML && React.createElement(AnalisisPrecioML, {
-    miembros: [p], costo: costoEf > 0 ? costoEf : 0, tasasCuotas: tasasCuotas, onAplicarML: onAplicarML
-  }),
+
   /*#__PURE__*/React.createElement("div", {
     className: "costo-card-body"
   }, /*#__PURE__*/React.createElement("div", {
@@ -2288,14 +2084,36 @@ function ProductoCostoCard({
     onChange: v => onUpdate(p.id, 'mgMinimo', v)
   })), /*#__PURE__*/React.createElement("div", {
     className: "costo-block costo-block-output"
-  }, /*#__PURE__*/React.createElement("h4", null, "Precio a la venta (calculado)"), !r && /*#__PURE__*/React.createElement("div", {
+  }, React.createElement("div", { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 } },
+    React.createElement("h4", { style: { margin: 0 } }, verML ? "Precio en Mercado Libre" : "Precio a la venta (calculado)"),
+    p.mlItemId && onAplicarML && React.createElement("button", { type: "button", className: "add-btn sync-btn", onClick: sincronizarEste, disabled: syncML },
+      syncML ? 'Sincronizando…' : 'Sincronizar con ML')),
+  syncMLError && React.createElement("div", { className: "competencia-error" }, syncMLError),
+  verML && React.createElement(React.Fragment, null,
+    React.createElement("div", { className: "precio-hero", style: nML.margen <= 0 ? { color: 'var(--danger, #ef4444)' } : undefined }, moneyDual(precioReal)),
+    React.createElement("div", { className: "tramo-nota" }, pvML
+      ? 'Con oferta' + (pvML.descuento_pct != null ? ' −' + pct(pvML.descuento_pct) : '') + ' · publicado a ' + money(Number(p.precioML))
+      : 'Precio publicado en Mercado Libre'),
+    React.createElement("div", { className: "costo-out-grid" },
+      React.createElement(CampoCalculado, { label: "Comisión variable (" + nML.cargoPct + "%)", value: moneyDual(nML.comVar) }),
+      React.createElement(CampoCalculado, { label: nML.fijo > 0 ? "Cargo fijo por unidad" : "Cargo fijo (no aplica)", value: nML.fijo > 0 ? moneyDual(nML.fijo) : "$0", highlight: nML.fijo > 0 }),
+      React.createElement(CampoCalculado, { label: "Financiamiento (" + ((p.cuotas || '6') === 'sin' ? 'sin cuotas' : p.cuotas + ' cuotas') + ")", value: moneyDual(nML.fin) }),
+      React.createElement(CampoCalculado, { label: "Envío", value: nML.envio > 0 ? moneyDual(nML.envio) : nML.envio < 0 ? '+' + money(-nML.envio) + ' a favor' : '$0 (lo paga el comprador)' }),
+      React.createElement(CampoCalculado, { label: "Retención IIBB (" + pct(leerIibb().pct) + ")", value: moneyDual(nML.iibb) }),
+      React.createElement(CampoCalculado, { label: "Costo del producto", value: moneyDual(costoEf) }),
+      React.createElement(CampoCalculado, { label: "Depósito de Mercado Libre", value: moneyDual(nML.deposito) }),
+      React.createElement(CampoCalculado, { label: "Ganancia s/costo producto", value: pct(nML.margen / costoEf * 100) }),
+      React.createElement(CampoCalculado, { label: "Margen real (%)", value: pct(nML.margenPct), highlight: true, danger: nML.margen <= 0 }),
+      React.createElement(CampoCalculado, { label: "Margen real ($)", value: moneyDual(nML.margen), highlight: true, danger: nML.margen <= 0 }),
+      React.createElement(CampoCalculado, { label: "Margen real (USD)", value: tcBelo ? moneyUsd(nML.margen / tcBelo) : '— (cargá el TC arriba)', highlight: !!tcBelo, danger: nML.margen <= 0 }))),
+  !verML && !r && /*#__PURE__*/React.createElement("div", {
     className: "sub-empty"
-  }, "Completá los 5 campos de la izquierda para calcular el precio sugerido."), r && r.error && /*#__PURE__*/React.createElement("div", {
+  }, "Completá los 5 campos de la izquierda para calcular el precio sugerido."), !verML && r && r.error && /*#__PURE__*/React.createElement("div", {
     className: "data-note",
     style: {
       marginBottom: 0
     }
-  }, r.error), r && !r.error && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, r.error), !verML && r && !r.error && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "precio-hero"
   }, moneyDual(r.precio)), /*#__PURE__*/React.createElement("div", {
     className: "tramo-nota"
@@ -9152,14 +8970,6 @@ function JopexPanel() {
         .grupo-familia .calc-field { min-width: 190px; }
         .grupo-sku-body { grid-template-columns: 1fr 1fr; }
         .grupo-tabla-wrap { overflow-x: auto; }
-        .analisis-ml-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
-        .analisis-ml-iibb { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; }
-        .analisis-ml-iibb-manual input { width: 70px; margin-left: 4px; }
-        .analisis-ml-cond { margin-top: 12px; }
-        .analisis-ml-cond-titulo { font-size: 13px; margin-bottom: 4px; }
-        .analisis-ml-tabla td, .analisis-ml-tabla th { white-space: nowrap; }
-        .analisis-ml-tabla th input { width: 90px; }
-        .analisis-ml-total td { border-top: 1px solid var(--border, rgba(255,255,255,.15)); }
         .grupo-tabla { width: 100%; border-collapse: collapse; font-size: 13px; }
         .grupo-tabla th { text-align: left; font-size: 11px; font-weight: 600; color: var(--text-secondary); padding: 6px 8px; white-space: nowrap; }
         .grupo-tabla td { padding: 8px; border-top: 1px dashed var(--border-soft); vertical-align: middle; white-space: nowrap; }
