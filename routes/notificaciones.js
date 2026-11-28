@@ -266,5 +266,5 @@ module.exports = (app) => {
     }
   });
 
-  return { webhook, api };
+  return { webhook, api, enviarTelegram };
 };

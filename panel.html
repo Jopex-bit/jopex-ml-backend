@@ -1046,7 +1046,7 @@ function calcularCosto(p, tasasCuotas) {
   const valorAdq = Number(p.valorAdquisicion);
   const envio = Number(p.envioML);
   const cargo = Number(p.cargoVenta);
-  const cuotas = p.cuotas || '6';
+  const cuotas = cuotasDe(p);
   // 'sin' = vender en 1 pago, sin ofrecer cuotas: no hay cargo de financiamiento.
   const fin = cuotas === 'sin' ? 0 : Number((tasasCuotas || TASAS_CUOTAS_DEFAULT)[cuotas]);
   const mg = Number(p.mgUtilidad);
@@ -1407,6 +1407,14 @@ const CONDICIONES_SKU = [
   { label: '3 cuotas sin interés', cuotas: '3' },
   { label: '6 cuotas sin interés', cuotas: '6' }
 ];
+// Condición de venta de una publicación: la que elegiste en la tarjeta o, si no elegiste ninguna,
+// la real de Mercado Libre (Clásica = sin cuotas; Premium = 6 cuotas sin interés). Antes se
+// asumía "6 cuotas" para todo y se restaba una financiación que no existía.
+function cuotasDe(p) {
+  if (p && p.cuotas) return p.cuotas;
+  if (p && p.mlItemId && p.financiamiento !== '' && p.financiamiento != null && !isNaN(p.financiamiento)) return Number(p.financiamiento) > 0 ? '6' : 'sin';
+  return '6';
+}
 function skuClave(p) { return ((p && p.sku) || '').trim().toUpperCase(); }
 function agruparPorSku(productos) {
   const grupos = [];
@@ -1572,7 +1580,7 @@ function agruparFamiliasStock(grupos) {
 }
 // Lo que queda con un precio de venta dado (el cargo fijo de ML se resuelve según ese precio).
 function margenConPrecio(precio, p, costo, tasasCuotas) {
-  const cu = p.cuotas || '6';
+  const cu = cuotasDe(p);
   const finPct = cu === 'sin' ? 0 : (Number((tasasCuotas || TASAS_CUOTAS_DEFAULT)[cu]) || 0);
   const envio = Number(p.envioML) || 0;
   const fijo = cargoFijoDe(precio, p);
@@ -1620,7 +1628,7 @@ function leerIibb() {
 function netoConPrecio(precio, m, costo, tasasCuotas, iibbPct, conf) {
   const c = conf || {};
   const cargoPct = c.cargo_venta_pct != null ? Number(c.cargo_venta_pct) : (Number(m.cargoVenta) || 0);
-  const cu = m.cuotas || '6';
+  const cu = cuotasDe(m);
   const finPct = cu === 'sin' ? 0 : (Number((tasasCuotas || TASAS_CUOTAS_DEFAULT)[cu]) || 0);
   const fijo = c.cargo_fijo != null ? Number(c.cargo_fijo) : cargoFijoDe(precio, m);
   const comVar = precio * cargoPct / 100;
@@ -1659,7 +1667,7 @@ function alertaMargenSku(g, tasasCuotas) {
     const costo = Number(m.valorAdquisicion);
     if (!pv || !(costo > 0)) return;
     const cond = tres ? CONDICIONES_SKU[i] : null;
-    const pe = { ...m, cuotas: cond ? cond.cuotas : (m.cuotas || '6') };
+    const pe = { ...m, cuotas: cond ? cond.cuotas : cuotasDe(m) };
     const mp = margenConPrecio(Number(pv.precio), pe, costo, tasas);
     const nv = nivelMargen(mp.margenPct, m);
     if (nv) lineas.push({ nivel: nv.nivel, cond: cond ? cond.label : '', precio: Number(pv.precio), margenPct: mp.margenPct, minimo: nv.minimo });
@@ -1685,7 +1693,7 @@ function PrecioManualBloque({ p, r, tasasCuotas, onUpdate, tcBelo }) {
   const pm = Number(p.precioManual);
   const hay = p.precioManual !== '' && p.precioManual != null && !isNaN(pm) && pm > 0;
   const cargoPct = Number(p.cargoVenta) || 0;
-  const finPct = (p.cuotas || '6') === 'sin' ? 0 : (Number((tasasCuotas || TASAS_CUOTAS_DEFAULT)[p.cuotas || '6']) || 0);
+  const finPct = cuotasDe(p) === 'sin' ? 0 : (Number((tasasCuotas || TASAS_CUOTAS_DEFAULT)[cuotasDe(p)]) || 0);
   let m = null;
   if (hay) {
     const fijo = cargoFijoDe(pm, p);
@@ -1708,7 +1716,7 @@ function PrecioManualBloque({ p, r, tasasCuotas, onUpdate, tcBelo }) {
       h('div', { className: 'costo-out-grid' },
         h(CampoCalculado, { label: 'Comisión variable (' + cargoPct + '%)', value: moneyDual(m.comVar) }),
         h(CampoCalculado, { label: m.fijo > 0 ? 'Cargo fijo por venta' : 'Cargo fijo (no aplica)', value: m.fijo > 0 ? moneyDual(m.fijo) : '$0', highlight: m.fijo > 0 }),
-        h(CampoCalculado, { label: 'Financiamiento (' + ((p.cuotas || '6') === 'sin' ? 'sin cuotas' : (p.cuotas || '6') + ' cuotas') + ')', value: moneyDual(m.fin) }),
+        h(CampoCalculado, { label: 'Financiamiento (' + (cuotasDe(p) === 'sin' ? 'sin cuotas' : cuotasDe(p) + ' cuotas') + ')', value: moneyDual(m.fin) }),
         h(CampoCalculado, { label: 'Envío al cliente', value: moneyDual(m.envio) }),
         h(CampoCalculado, { label: 'Costo del producto', value: moneyDual(r.costoProductoARS) }),
         h(CampoCalculado, { label: 'Depósito de Mercado Libre', value: moneyDual(m.deposito), highlight: true }),
@@ -1767,7 +1775,7 @@ function GrupoSkuCard({ g, onUpdateGrupo, onUpdateMiembro, onRemove, onDuplicate
 
   const filas = g.miembros.map((m, i) => {
     const cond = tres ? CONDICIONES_SKU[i] : null;
-    const cuotas = cond ? cond.cuotas : (m.cuotas || '6');
+    const cuotas = cond ? cond.cuotas : cuotasDe(m);
     const pe = { ...m, valorAdquisicion: costo, cuotas };
     const r = costoOk ? calcularCosto(pe, tasasCuotas) : null;
     const pub = Number(m.precioML);
@@ -2050,7 +2058,7 @@ function ProductoCostoCard({
     /*#__PURE__*/React.createElement("span", { className: "calc-field-label" }, "Cuotas"),
     /*#__PURE__*/React.createElement("div", { className: "calc-field-input" },
       /*#__PURE__*/React.createElement("select", {
-        value: p.cuotas || '6',
+        value: cuotasDe(p),
         onChange: e => onUpdate(p.id, 'cuotas', e.target.value)
       },
         /*#__PURE__*/React.createElement("option", { value: "sin" }, "Sin cuotas (1 pago)"),
@@ -2097,7 +2105,7 @@ function ProductoCostoCard({
     React.createElement("div", { className: "costo-out-grid" },
       React.createElement(CampoCalculado, { label: "Comisión variable (" + nML.cargoPct + "%)", value: moneyDual(nML.comVar) }),
       React.createElement(CampoCalculado, { label: nML.fijo > 0 ? "Cargo fijo por unidad" : "Cargo fijo (no aplica)", value: nML.fijo > 0 ? moneyDual(nML.fijo) : "$0", highlight: nML.fijo > 0 }),
-      React.createElement(CampoCalculado, { label: "Financiamiento (" + ((p.cuotas || '6') === 'sin' ? 'sin cuotas' : p.cuotas + ' cuotas') + ")", value: moneyDual(nML.fin) }),
+      React.createElement(CampoCalculado, { label: "Financiamiento (" + (cuotasDe(p) === 'sin' ? 'sin cuotas' : cuotasDe(p) + ' cuotas') + ")", value: moneyDual(nML.fin) }),
       React.createElement(CampoCalculado, { label: "Envío", value: nML.envio > 0 ? moneyDual(nML.envio) : nML.envio < 0 ? '+' + money(-nML.envio) + ' a favor' : '$0 (lo paga el comprador)' }),
       React.createElement(CampoCalculado, { label: "Retención IIBB (" + pct(leerIibb().pct) + ")", value: moneyDual(nML.iibb) }),
       React.createElement(CampoCalculado, { label: "Costo del producto", value: moneyDual(costoEf) }),
@@ -2195,7 +2203,7 @@ function ProductoCostoCard({
     const pv = promoVigente(p);
     const prox = promosProximas(p);
     if (!pv && !prox.length) return null;
-    const mp = pv && r && !r.error ? margenConPrecio(Number(pv.precio), { ...p, cuotas: p.cuotas || '6' }, r.costoProductoARS, tasasCuotas) : null;
+    const mp = pv && r && !r.error ? margenConPrecio(Number(pv.precio), { ...p, cuotas: cuotasDe(p) }, r.costoProductoARS, tasasCuotas) : null;
     return h('div', { className: 'data-note', style: { marginBottom: 10 } },
       pv && h('div', null, h('b', null, 'Oferta vigente en Mercado Libre: '), money(Number(pv.precio)) + (pv.descuento_pct != null ? ' (−' + pct(pv.descuento_pct) + ')' : '') + ' · ' + (pv.campana || pv.tipo) + (pv.hasta ? ' · hasta ' + fechaHoraCorta(pv.hasta) : '') + (mp ? ' → margen real ' + pct(mp.margenPct) + ' · ' + money(mp.margen) : '')),
       prox.length > 0 && h('div', null, h('b', null, 'Programadas: '), prox.map(x => fechaHoraCorta(x.desde) + '–' + fechaHoraCorta(x.hasta) + ' ' + money(x.precio)).join(' · ')));
@@ -8185,7 +8193,8 @@ const CLAVES_RESPALDO = [
   'jopex_envios_cp_zonas',
   'jopex_envios_zona_manual',
   'jopex_envios_desde',
-  'jopex_familias_stock_cfg'
+  'jopex_familias_stock_cfg',
+  'jopex_costos_efectivos'
 ];
 
 // ---------------------------------------------------------------------------
@@ -8470,6 +8479,27 @@ function JopexPanel() {
       window.localStorage.setItem('jopex_stock_productos', JSON.stringify(stockProductos));
     } catch (e) {}
   }, [stockProductos]);
+  // Costo efectivo por publicación (el mismo que usa Costos: componentes, lote en uso o último
+  // lote). Lo lee el servidor para revisar las ofertas de ML aunque el panel esté cerrado.
+  React.useEffect(() => {
+    try {
+      const mapa = {};
+      const tasas = leerTasasCuotas();
+      agruparPorSku(productos).forEach(g => {
+        const tres = g.miembros.length === 3;
+        g.miembros.forEach((p, i) => {
+          if (!p.mlItemId) return;
+          const v = Number(productoConCostoEfectivo(p, cotizaciones, stockProductos).valorAdquisicion);
+          if (!(v > 0)) return;
+          // Misma condición de venta que muestra Costos (en un SKU de 3: contado, 3 y 6 cuotas).
+          const cu = tres ? CONDICIONES_SKU[i].cuotas : cuotasDe(p);
+          mapa[p.mlItemId] = { costo: Math.round(v * 100) / 100, sku: p.sku || '', cuotas: cu, finPct: cu === 'sin' ? 0 : (Number(tasas[cu]) || 0) };
+        });
+      });
+      const txt = JSON.stringify(mapa);
+      if (window.localStorage.getItem('jopex_costos_efectivos') !== txt) window.localStorage.setItem('jopex_costos_efectivos', txt);
+    } catch (e) {}
+  }, [productos, cotizaciones, stockProductos]);
 
   // Configuración del módulo Ads: tu política de objetivos + lo definido por publicación.
   const [adsCfg, setAdsCfg] = useState(() => {

@@ -210,6 +210,10 @@ app.use('/api/familia-stock', requireApiKey, familiaStock.api);
 const notificaciones = require('./routes/notificaciones')(app);
 app.use('/webhooks', notificaciones.webhook);
 app.use('/api/notificaciones', requireApiKey, notificaciones.api);
+// Guardia de ofertas: saca de ML las ofertas que dejan margen negativo y avisa por Telegram.
+const guardiaOfertas = require('./routes/guardia-ofertas')(app, notificaciones.enviarTelegram);
+app.use('/api/guardia-ofertas', requireApiKey, guardiaOfertas.api);
+guardiaOfertas.programar();
 
 // ---------------------------------------------------------------------------
 // Panel web: login + servir el HTML
